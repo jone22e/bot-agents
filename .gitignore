@@ -1,0 +1,24 @@
+# Arquivos gerados para o usuario (planilhas, relatorios, exportacoes)
+tmp/
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+apps/desktop/src-tauri/gen/schemas
+apps/desktop/src-tauri/binaries/
+
+# Logs
+*.log
+
+# Editor / OS
+.idea/
+.DS_Store
+.vscode/*
+!.vscode/extensions.json

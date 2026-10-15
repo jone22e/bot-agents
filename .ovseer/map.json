@@ -1,0 +1,1007 @@
+{
+  "version": 1,
+  "generatedBy": "Ovseer",
+  "areas": [
+    {
+      "id": "dots",
+      "name": "DOTs",
+      "description": "Criação, configuração e ciclo de vida dos agentes (DOTs), incluindo equipe e delegação"
+    },
+    {
+      "id": "permissoes",
+      "name": "Permissões e políticas",
+      "description": "Nível de confiança, comandos permitidos, rede e delegação por DOT"
+    },
+    {
+      "id": "workspaces",
+      "name": "Workspaces",
+      "description": "Pastas de trabalho dos DOTs e rastreio das alterações feitas nelas"
+    },
+    {
+      "id": "aprovacoes",
+      "name": "Aprovações",
+      "description": "Pedidos de permissão e perguntas dos DOTs que aguardam decisão do usuário"
+    },
+    {
+      "id": "tarefas",
+      "name": "Tarefas e execuções",
+      "description": "Criação, fila, execução, acompanhamento e retomada de tarefas dos DOTs"
+    },
+    {
+      "id": "conversas",
+      "name": "Conversas",
+      "description": "Chat com DOTs, histórico de mensagens e anexos"
+    },
+    {
+      "id": "memoria",
+      "name": "Memória",
+      "description": "O que cada DOT aprende e lembra entre trabalhos"
+    },
+    {
+      "id": "automacao",
+      "name": "Automação",
+      "description": "Agendamentos recorrentes e assinaturas de eventos que disparam tarefas"
+    },
+    {
+      "id": "motores",
+      "name": "Motores de IA",
+      "description": "Detecção, seleção e uso dos assistentes de IA (Claude Code, Codex, AGY)"
+    },
+    {
+      "id": "integracoes",
+      "name": "Integrações",
+      "description": "Servidor MCP, integração com o AGY e canal local entre interface e runtime"
+    },
+    {
+      "id": "runtime",
+      "name": "Runtime e serviço",
+      "description": "Processo dotsd em segundo plano: início, controle, backups e empacotamento"
+    },
+    {
+      "id": "monitoramento",
+      "name": "Monitoramento e auditoria",
+      "description": "Visão geral, central de operações, estatísticas, logs e trilha de auditoria"
+    },
+    {
+      "id": "configuracoes",
+      "name": "Configurações e onboarding",
+      "description": "Primeira execução e preferências do aplicativo"
+    }
+  ],
+  "features": [
+    {
+      "id": "c2-1",
+      "name": "Gerenciar DOTs (listar, pausar, duplicar, arquivar)",
+      "area": "dots",
+      "description": "Lista, cria, edita, pausa e arquiva agentes a partir de modelos",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src/router/index.ts",
+        "apps/desktop/src/stores/dots.ts",
+        "apps/desktop/src/lib/templates.ts",
+        "crates/dots-storage/src/repos/dots.rs",
+        "apps/desktop/src/views/DotsView.vue",
+        "crates/dots-core/bindings/Dot.ts",
+        "crates/dots-core/bindings/DotCreate.ts",
+        "crates/dots-core/bindings/DotUpdate.ts",
+        "crates/dots-core/bindings/DotStatus.ts",
+        "crates/dots-core/bindings/DotRole.ts",
+        "crates/dots-core/bindings/DotLimits.ts",
+        "packages/shared-types/src/generated/Dot.ts",
+        "packages/shared-types/src/generated/DotCreate.ts",
+        "packages/shared-types/src/generated/DotUpdate.ts",
+        "packages/shared-types/src/generated/DotStatus.ts",
+        "packages/shared-types/src/generated/DotRole.ts",
+        "packages/shared-types/src/generated/DotLimits.ts",
+        "crates/dots-core/src/dot.rs",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c1-2",
+      "name": "Criar e editar DOT",
+      "area": "dots",
+      "description": "Formulário para criar ou editar um DOT, com modelos prontos, pasta e limites",
+      "kind": "screen",
+      "files": [
+        "apps/desktop/src/components/DotForm.vue",
+        "apps/desktop/src/views/DotEditorView.vue"
+      ]
+    },
+    {
+      "id": "c1-7",
+      "name": "Definir equipe de delegação do DOT",
+      "area": "dots",
+      "description": "Escolhe a quais outros DOTs este pode pedir trabalho e a profundidade permitida",
+      "kind": "config",
+      "files": [
+        "apps/desktop/src/components/TeamPanel.vue"
+      ]
+    },
+    {
+      "id": "c4-7",
+      "name": "Delegar tarefas entre DOTs",
+      "area": "dots",
+      "description": "Um DOT repassa subtarefas a outro e acompanha o andamento",
+      "kind": "action",
+      "files": [
+        "crates/dots-core/bindings/Delegation.ts",
+        "crates/dots-core/bindings/DelegationStatus.ts",
+        "crates/dots-runtime/src/delegation.rs",
+        "packages/shared-types/src/generated/Delegation.ts",
+        "packages/shared-types/src/generated/DelegationStatus.ts",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c1-6",
+      "name": "Definir permissões e política de ferramentas do DOT",
+      "area": "permissoes",
+      "description": "Define o que o DOT faz sozinho, comandos permitidos, rede e pastas de acesso",
+      "kind": "config",
+      "files": [
+        "apps/desktop/src/components/PolicyPanel.vue",
+        "apps/desktop/src/stores/policies.ts",
+        "apps/desktop/src/lib/templates.ts",
+        "crates/dots-storage/src/repos/policies.rs",
+        "packages/shared-types/src/generated/ToolPolicy.ts",
+        "packages/shared-types/src/generated/ToolPolicyUpdate.ts",
+        "packages/shared-types/src/generated/RiskLevel.ts"
+      ]
+    },
+    {
+      "id": "c4-3",
+      "name": "Gerenciar workspaces do DOT",
+      "area": "workspaces",
+      "description": "Definir pastas de trabalho primária e externas de cada DOT, com permissões de leitura e escrita",
+      "kind": "config",
+      "files": [
+        "crates/dots-core/bindings/DotWorkspace.ts"
+      ]
+    },
+    {
+      "id": "c8-7",
+      "name": "Consultar alterações nos workspaces",
+      "area": "workspaces",
+      "description": "Lista arquivos alterados pelos dots durante cada execução",
+      "kind": "report",
+      "files": [
+        "crates/dots-storage/src/repos/changes.rs",
+        "packages/shared-types/src/generated/WorkspaceChange.ts",
+        "packages/shared-types/src/generated/ProcessSample.ts",
+        "packages/shared-types/src/generated/RuntimeStats.ts"
+      ]
+    },
+    {
+      "id": "c1-0",
+      "name": "Aprovar ou negar ações dos DOTs",
+      "area": "aprovacoes",
+      "description": "Permite ou nega ações pedidas pelos DOTs, com detalhes de risco e parâmetros",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src/components/ApprovalBanner.vue",
+        "apps/desktop/src/components/ApprovalCard.vue",
+        "apps/desktop/src/views/ApprovalsView.vue",
+        "apps/desktop/src/views/ConversationsView.vue",
+        "apps/desktop/src/stores/approvals.ts",
+        "apps/desktop/src/lib/humanize.ts",
+        "apps/desktop/src/composables/useRuntimeEvents.ts",
+        "crates/dots-core/bindings/ApprovalKind.ts",
+        "crates/dots-core/src/policy.rs",
+        "crates/dots-core/src/task.rs",
+        "crates/dots-runtime/src/gateway.rs",
+        "crates/dots-runtime/src/policy.rs",
+        "crates/dots-runtime/src/registry.rs",
+        "crates/dots-runtime/src/scheduler.rs",
+        "crates/dots-storage/src/repos/approvals.rs",
+        "packages/shared-types/src/generated/Approval.ts",
+        "packages/shared-types/src/generated/ApprovalKind.ts",
+        "packages/shared-types/src/generated/ApprovalStatus.ts",
+        "packages/shared-types/src/generated/AutoApproveLevel.ts",
+        "packages/shared-types/src/generated/RuntimeStats.ts",
+        "packages/shared-types/src/generated/TaskStatus.ts",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c1-1",
+      "name": "Responder perguntas dos DOTs",
+      "area": "aprovacoes",
+      "description": "Responde a perguntas feitas pelos DOTs, escolhendo uma opção ou escrevendo texto",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src/components/ApprovalBanner.vue",
+        "apps/desktop/src/components/ApprovalCard.vue"
+      ]
+    },
+    {
+      "id": "c10-1",
+      "name": "Criar tarefas para um DOT",
+      "area": "tarefas",
+      "description": "Cria tarefas com prompt, prioridade e anexos e acompanha o status",
+      "kind": "action",
+      "files": [
+        "packages/shared-types/src/generated/Task.ts",
+        "packages/shared-types/src/generated/TaskCreate.ts",
+        "packages/shared-types/src/generated/TaskKind.ts",
+        "packages/shared-types/src/generated/TaskStatus.ts",
+        "apps/desktop/src/views/ActivitiesView.vue"
+      ]
+    },
+    {
+      "id": "c5-5",
+      "name": "Acompanhar tarefas e execuções em tempo real",
+      "area": "tarefas",
+      "description": "Lista tarefas com status (fila, execução, aprovação, concluída, falha) e eventos",
+      "kind": "screen",
+      "files": [
+        "crates/dots-core/src/task.rs",
+        "apps/desktop/src/components/EventTimeline.vue",
+        "apps/desktop/src/components/TaskStatusBadge.vue",
+        "packages/shared-types/src/generated/Execution.ts",
+        "packages/shared-types/src/generated/ExecutionStatus.ts",
+        "packages/shared-types/src/generated/ExecutionEvent.ts",
+        "packages/shared-types/src/generated/ExecutionEventRecord.ts"
+      ]
+    },
+    {
+      "id": "c8-1",
+      "name": "Executar tarefas na fila com agentes",
+      "area": "tarefas",
+      "description": "Enfileira tarefas e roda execuções de agentes com controle de tentativas e cancelamento",
+      "kind": "job",
+      "files": [
+        "crates/dots-storage/src/repos/tasks.rs",
+        "crates/dots-storage/src/repos/executions.rs",
+        "crates/dots-runtime/src/executor.rs",
+        "crates/dots-runtime/src/scheduler.rs"
+      ]
+    },
+    {
+      "id": "c9-8",
+      "name": "Retomar tarefas por checkpoint",
+      "area": "tarefas",
+      "description": "Salva pontos de controle para continuar tarefas interrompidas",
+      "kind": "job",
+      "files": [
+        "packages/shared-types/src/generated/Checkpoint.ts"
+      ]
+    },
+    {
+      "id": "c3-2",
+      "name": "Conversar com um DOT",
+      "area": "conversas",
+      "description": "Manter conversas com um DOT, anexar arquivos, parar ou excluir conversas",
+      "kind": "screen",
+      "files": [
+        "apps/desktop/src/views/ConversationsView.vue",
+        "crates/dots-core/bindings/Conversation.ts",
+        "crates/dots-core/bindings/Message.ts",
+        "crates/dots-core/bindings/MessageRole.ts",
+        "crates/dots-core/src/conversation.rs",
+        "crates/dots-storage/src/repos/conversations.rs",
+        "apps/desktop/src/router/index.ts",
+        "apps/desktop/src/stores/conversations.ts",
+        "apps/desktop/src/stores/tasks.ts",
+        "apps/desktop/src/lib/humanize.ts",
+        "apps/desktop/src/composables/useRuntimeEvents.ts",
+        "packages/shared-types/src/generated/Conversation.ts",
+        "packages/shared-types/src/generated/Message.ts",
+        "packages/shared-types/src/generated/MessageRole.ts",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c1-5",
+      "name": "Gerenciar memórias do DOT",
+      "area": "memoria",
+      "description": "Ensina, busca, edita e exclui o que o DOT aprendeu ou lembra de trabalhos",
+      "kind": "screen",
+      "files": [
+        "apps/desktop/src/components/MemoryPanel.vue",
+        "apps/desktop/src/stores/memories.ts",
+        "packages/shared-types/src/generated/Memory.ts",
+        "packages/shared-types/src/generated/MemoryCreate.ts",
+        "packages/shared-types/src/generated/MemoryKind.ts",
+        "packages/shared-types/src/generated/MemoryUpdate.ts",
+        "crates/dots-core/src/memory.rs",
+        "crates/dots-storage/src/repos/memories.rs"
+      ]
+    },
+    {
+      "id": "c4-4",
+      "name": "Agendar execuções recorrentes",
+      "area": "automacao",
+      "description": "Programar tarefas recorrentes por intervalo, diária, semanal ou cron",
+      "kind": "job",
+      "files": [
+        "crates/dots-core/bindings/Schedule.ts",
+        "crates/dots-core/bindings/ScheduleCreate.ts",
+        "crates/dots-core/bindings/ScheduleUpdate.ts",
+        "crates/dots-core/bindings/ScheduleKind.ts",
+        "crates/dots-core/src/automation.rs",
+        "crates/dots-runtime/src/schedules.rs",
+        "crates/dots-runtime/src/service.rs",
+        "packages/shared-types/src/generated/Schedule.ts",
+        "packages/shared-types/src/generated/ScheduleCreate.ts",
+        "packages/shared-types/src/generated/ScheduleKind.ts",
+        "packages/shared-types/src/generated/ScheduleUpdate.ts"
+      ]
+    },
+    {
+      "id": "c4-5",
+      "name": "Disparar DOTs por eventos e alterações de arquivos",
+      "area": "automacao",
+      "description": "Disparar pedidos automáticos a DOTs quando eventos correspondentes ocorrem",
+      "kind": "job",
+      "files": [
+        "crates/dots-core/bindings/EventSubscription.ts",
+        "crates/dots-core/bindings/EventRecord.ts",
+        "crates/dots-core/bindings/SubscriptionCreate.ts",
+        "crates/dots-core/bindings/SubscriptionFilter.ts",
+        "crates/dots-core/bindings/SubscriptionUpdate.ts",
+        "crates/dots-core/src/automation.rs",
+        "crates/dots-runtime/src/events.rs",
+        "crates/dots-runtime/src/watcher.rs",
+        "packages/shared-types/src/generated/EventSubscription.ts",
+        "packages/shared-types/src/generated/EventRecord.ts",
+        "packages/shared-types/src/generated/SubscriptionCreate.ts",
+        "packages/shared-types/src/generated/SubscriptionFilter.ts",
+        "packages/shared-types/src/generated/SubscriptionUpdate.ts",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c0-4",
+      "name": "Administrar agendamentos e assinaturas",
+      "area": "automacao",
+      "description": "Cria, lista, altera e remove agendamentos e inscrições de eventos dos dots",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src/api/index.ts",
+        "apps/desktop/src/api/ipc.ts",
+        "apps/desktop/src/components/TriggersPanel.vue",
+        "apps/desktop/src/stores/automation.ts",
+        "apps/desktop/src/lib/humanize.ts",
+        "crates/dots-storage/src/repos/automation.rs"
+      ]
+    },
+    {
+      "id": "c6-0",
+      "name": "Detectar motores de IA instalados",
+      "area": "motores",
+      "description": "Localiza Claude Code, Codex e AGY e verifica versão e login",
+      "kind": "job",
+      "files": [
+        "crates/dots-engines/src/detect.rs",
+        "crates/dots-engines/src/resolve.rs",
+        "crates/dots-engines/src/specs.rs",
+        "apps/desktop/src/stores/engines.ts",
+        "apps/desktop/src/lib/humanize.ts",
+        "apps/desktop/src/router/index.ts",
+        "apps/desktop/src/views/EnginesView.vue",
+        "apps/desktop/src/views/OnboardingView.vue"
+      ]
+    },
+    {
+      "id": "c1-4",
+      "name": "Configurar e escolher motor de IA",
+      "area": "motores",
+      "description": "Verifica instalação e login dos assistentes de IA, liga/desliga e integra o Agy",
+      "kind": "config",
+      "files": [
+        "apps/desktop/src/components/EngineCard.vue",
+        "crates/dots-core/bindings/EngineConfiguration.ts",
+        "crates/dots-core/bindings/EngineDetection.ts",
+        "crates/dots-core/bindings/EngineKind.ts",
+        "crates/dots-core/bindings/EngineCapability.ts",
+        "crates/dots-core/bindings/AuthStatus.ts",
+        "crates/dots-storage/src/repos/engines.rs",
+        "packages/shared-types/src/generated/EngineConfiguration.ts",
+        "packages/shared-types/src/generated/EngineDetection.ts",
+        "packages/shared-types/src/generated/EngineKind.ts",
+        "packages/shared-types/src/generated/AuthStatus.ts",
+        "packages/shared-types/src/index.ts",
+        "crates/dots-core/src/engine.rs"
+      ]
+    },
+    {
+      "id": "c6-1",
+      "name": "Executar prompt no motor de IA",
+      "area": "motores",
+      "description": "Envia um prompt a um motor de IA e recebe o progresso em tempo real",
+      "kind": "action",
+      "files": [
+        "crates/dots-engines/src/manager.rs",
+        "crates/dots-engines/src/runner.rs",
+        "crates/dots-engines/src/process.rs",
+        "crates/dots-engines/src/request.rs",
+        "crates/dots-engines/src/adapters/mod.rs",
+        "crates/dots-engines/src/adapters/claude.rs",
+        "crates/dots-engines/src/adapters/codex.rs",
+        "crates/dots-engines/src/adapters/agy.rs"
+      ]
+    },
+    {
+      "id": "c6-2",
+      "name": "Expor ferramentas do DOTS via MCP",
+      "area": "integracoes",
+      "description": "Conecta o motor de IA ao servidor MCP do DOTS com ferramentas",
+      "kind": "integration",
+      "files": [
+        "crates/dots-engines/src/request.rs",
+        "crates/dots-engines/src/adapters/claude.rs",
+        "crates/dots-engines/src/adapters/codex.rs",
+        "crates/dots-engines/src/adapters/agy.rs"
+      ]
+    },
+    {
+      "id": "c7-5",
+      "name": "Integrar com o AGY",
+      "area": "integracoes",
+      "description": "Registra o servidor MCP do DOTS no AGY com consentimento e possibilidade de remoção",
+      "kind": "integration",
+      "files": [
+        "crates/dots-runtime/src/agy_setup.rs",
+        "crates/dots-runtime/src/mcp_gateway.rs",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c7-8",
+      "name": "Canal local autenticado com o runtime",
+      "area": "integracoes",
+      "description": "Canal local autenticado por token entre a interface, o runtime e os CLIs dos motores",
+      "kind": "api",
+      "files": [
+        "crates/dots-ipc/src/client.rs",
+        "crates/dots-ipc/src/server.rs",
+        "crates/dots-ipc/src/protocol.rs",
+        "crates/dots-ipc/src/paths.rs",
+        "crates/dots-ipc/src/lib.rs"
+      ]
+    },
+    {
+      "id": "c7-7",
+      "name": "Executar o runtime dotsd em segundo plano",
+      "area": "runtime",
+      "description": "Processo único que mantém banco, comunicação local, agendador e encerramento controlado",
+      "kind": "job",
+      "files": [
+        "crates/dots-runtime/src/main.rs",
+        "crates/dots-runtime/src/lock.rs",
+        "crates/dots-runtime/src/shutdown.rs",
+        "crates/dots-runtime/src/cli.rs",
+        "crates/dots-runtime/src/paths.rs"
+      ]
+    },
+    {
+      "id": "c0-0",
+      "name": "Conectar ao runtime",
+      "area": "runtime",
+      "description": "Inicia ou reconecta ao processo dotsd e exibe o status da conexão",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src-tauri/src/commands.rs",
+        "apps/desktop/src-tauri/src/connection.rs",
+        "apps/desktop/src-tauri/src/supervisor.rs"
+      ]
+    },
+    {
+      "id": "c0-1",
+      "name": "Parar, reiniciar e consultar o serviço",
+      "area": "runtime",
+      "description": "Controla o processo dotsd e mostra seu estado no launchd",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src-tauri/src/commands.rs",
+        "apps/desktop/src-tauri/src/supervisor.rs",
+        "apps/desktop/src/views/SettingsView.vue"
+      ]
+    },
+    {
+      "id": "c5-9",
+      "name": "Consultar status do runtime",
+      "area": "runtime",
+      "description": "Mostra PID, versão, uptime e modo de execução (launchd, detached, manual)",
+      "kind": "screen",
+      "files": [
+        "crates/dots-core/src/runtime.rs",
+        "crates/dots-core/src/installation.rs"
+      ]
+    },
+    {
+      "id": "c10-8",
+      "name": "Configurar modo de execução do runtime",
+      "area": "runtime",
+      "description": "Escolhe execução via launchd, processo separado ou manual e mostra status",
+      "kind": "config",
+      "files": [
+        "packages/shared-types/src/generated/RuntimeMode.ts",
+        "packages/shared-types/src/generated/RuntimeStatus.ts",
+        "packages/shared-types/src/generated/Installation.ts"
+      ]
+    },
+    {
+      "id": "c11-8",
+      "name": "Iniciar runtime com o sistema (launchd)",
+      "area": "runtime",
+      "description": "Executa o runtime dotsd como serviço em segundo plano via launchd",
+      "kind": "job",
+      "files": [
+        "packages/shared-types/src/index.ts",
+        "scripts/build-sidecar.sh",
+        "apps/desktop/src-tauri/src/commands.rs",
+        "apps/desktop/src-tauri/src/supervisor.rs"
+      ]
+    },
+    {
+      "id": "c0-5",
+      "name": "Administrar o runtime (pausa geral, logs, desligar)",
+      "area": "runtime",
+      "description": "Gera backups, consulta logs, pausa todos os agentes e desliga o runtime",
+      "kind": "action",
+      "files": [
+        "apps/desktop/src/api/index.ts"
+      ]
+    },
+    {
+      "id": "c9-9",
+      "name": "Fazer backup do banco de dados",
+      "area": "runtime",
+      "description": "Gera backups antes de migrações e mantém cópias recentes",
+      "kind": "job",
+      "files": [
+        "crates/dots-storage/src/storage.rs"
+      ]
+    },
+    {
+      "id": "c11-9",
+      "name": "Empacotar o runtime no app desktop",
+      "area": "runtime",
+      "description": "Compila o dotsd em release e o instala como sidecar do app Tauri",
+      "kind": "job",
+      "files": [
+        "scripts/build-sidecar.sh"
+      ]
+    },
+    {
+      "id": "c2-0",
+      "name": "Visão geral do sistema",
+      "area": "monitoramento",
+      "description": "Mostra o painel inicial com o resumo de DOTs, tarefas e atividade",
+      "kind": "screen",
+      "files": [
+        "apps/desktop/src/router/index.ts",
+        "apps/desktop/src/stores/overview.ts",
+        "apps/desktop/src/components/AppShell.vue",
+        "apps/desktop/src/components/RuntimeIndicator.vue",
+        "apps/desktop/src/components/OpsPanel.vue",
+        "apps/desktop/src/views/OverviewView.vue"
+      ]
+    },
+    {
+      "id": "c4-8",
+      "name": "Central de operações (uso, custo, tokens)",
+      "area": "monitoramento",
+      "description": "Ver execuções, uso por motor, custo, tokens e processos em tempo real",
+      "kind": "report",
+      "files": [
+        "crates/dots-core/bindings/RuntimeStats.ts",
+        "crates/dots-core/bindings/EngineUsage.ts",
+        "crates/dots-core/bindings/ProcessSample.ts",
+        "crates/dots-core/bindings/AuditLog.ts",
+        "crates/dots-runtime/src/stats.rs",
+        "packages/shared-types/src/generated/EngineUsage.ts"
+      ]
+    },
+    {
+      "id": "c2-8",
+      "name": "Consultar estatísticas, eventos e logs do runtime",
+      "area": "monitoramento",
+      "description": "Exibe estatísticas de execução e logs recentes do serviço em segundo plano",
+      "kind": "report",
+      "files": [
+        "apps/desktop/src/stores/ops.ts",
+        "apps/desktop/src/stores/runtime.ts",
+        "apps/desktop/src/api/index.ts"
+      ]
+    },
+    {
+      "id": "c5-8",
+      "name": "Consultar log de auditoria",
+      "area": "monitoramento",
+      "description": "Registra e exibe ações executadas por usuário, runtime ou DOT",
+      "kind": "report",
+      "files": [
+        "crates/dots-core/src/audit.rs",
+        "crates/dots-storage/src/repos/audit.rs",
+        "packages/shared-types/src/generated/AuditLog.ts",
+        "packages/shared-types/src/index.ts"
+      ]
+    },
+    {
+      "id": "c0-3",
+      "name": "Assistente de primeira execução",
+      "area": "configuracoes",
+      "description": "Guia o usuário na configuração inicial até concluir o onboarding",
+      "kind": "screen",
+      "files": [
+        "apps/desktop/src/App.vue",
+        "apps/desktop/src/router/index.ts",
+        "apps/desktop/src/stores/settings.ts",
+        "apps/desktop/src/views/OnboardingView.vue"
+      ]
+    },
+    {
+      "id": "c5-10",
+      "name": "Configurar preferências do aplicativo",
+      "area": "configuracoes",
+      "description": "Define onboarding, backups, início automático com o login e idioma da interface",
+      "kind": "config",
+      "files": [
+        "crates/dots-core/src/settings.rs"
+      ]
+    }
+  ],
+  "links": [
+    {
+      "from": "c1-2",
+      "to": "c1-6",
+      "why": "formulário define permissões do DOT"
+    },
+    {
+      "from": "c1-2",
+      "to": "c4-3",
+      "why": "formulário define workspace do DOT"
+    },
+    {
+      "from": "c1-2",
+      "to": "c1-7",
+      "why": "formulário define equipe de delegação"
+    },
+    {
+      "from": "c1-2",
+      "to": "c1-5",
+      "why": "edita memória do DOT"
+    },
+    {
+      "from": "c1-2",
+      "to": "c4-4",
+      "why": "configura agendamentos do DOT"
+    },
+    {
+      "from": "c1-2",
+      "to": "c4-5",
+      "why": "configura gatilhos por evento"
+    },
+    {
+      "from": "c1-2",
+      "to": "c1-4",
+      "why": "escolhe motor de IA do DOT"
+    },
+    {
+      "from": "c2-1",
+      "to": "c1-2",
+      "why": "abre criação e edição"
+    },
+    {
+      "from": "c2-1",
+      "to": "c3-2",
+      "why": "abre conversa com o DOT"
+    },
+    {
+      "from": "c2-1",
+      "to": "c10-1",
+      "why": "pede trabalho ao DOT"
+    },
+    {
+      "from": "c1-7",
+      "to": "c4-7",
+      "why": "define quem pode receber delegação"
+    },
+    {
+      "from": "c1-6",
+      "to": "c4-7",
+      "why": "política limita profundidade de delegação"
+    },
+    {
+      "from": "c4-7",
+      "to": "c10-1",
+      "why": "cria subtarefa para outro DOT"
+    },
+    {
+      "from": "c10-1",
+      "to": "c8-1",
+      "why": "enfileira a tarefa para execução"
+    },
+    {
+      "from": "c3-2",
+      "to": "c8-1",
+      "why": "mensagem gera execução"
+    },
+    {
+      "from": "c3-2",
+      "to": "c5-5",
+      "why": "mostra tarefas e eventos da conversa"
+    },
+    {
+      "from": "c8-1",
+      "to": "c6-1",
+      "why": "roda o prompt no motor de IA"
+    },
+    {
+      "from": "c8-1",
+      "to": "c1-5",
+      "why": "carrega memória no contexto"
+    },
+    {
+      "from": "c8-1",
+      "to": "c4-3",
+      "why": "executa dentro do workspace"
+    },
+    {
+      "from": "c8-1",
+      "to": "c1-6",
+      "why": "aplica política de ferramentas"
+    },
+    {
+      "from": "c8-1",
+      "to": "c1-0",
+      "why": "ação de risco gera pedido de aprovação"
+    },
+    {
+      "from": "c8-1",
+      "to": "c1-1",
+      "why": "DOT pode perguntar ao usuário"
+    },
+    {
+      "from": "c8-1",
+      "to": "c9-8",
+      "why": "salva checkpoints da tarefa"
+    },
+    {
+      "from": "c8-1",
+      "to": "c8-7",
+      "why": "registra arquivos alterados"
+    },
+    {
+      "from": "c8-1",
+      "to": "c5-8",
+      "why": "registra ações na auditoria"
+    },
+    {
+      "from": "c8-1",
+      "to": "c5-5",
+      "why": "emite eventos de progresso"
+    },
+    {
+      "from": "c8-1",
+      "to": "c4-5",
+      "why": "conclusão emite eventos"
+    },
+    {
+      "from": "c9-8",
+      "to": "c8-1",
+      "why": "retoma execução interrompida"
+    },
+    {
+      "from": "c1-0",
+      "to": "c1-6",
+      "why": "nível de auto-aprovação define o que exige revisão"
+    },
+    {
+      "from": "c1-0",
+      "to": "c8-1",
+      "why": "decisão libera ou bloqueia a execução"
+    },
+    {
+      "from": "c1-1",
+      "to": "c8-1",
+      "why": "resposta destrava a tarefa"
+    },
+    {
+      "from": "c1-0",
+      "to": "c5-8",
+      "why": "decisão é auditada"
+    },
+    {
+      "from": "c6-1",
+      "to": "c6-2",
+      "why": "motor usa ferramentas via MCP"
+    },
+    {
+      "from": "c6-1",
+      "to": "c6-0",
+      "why": "precisa de motor detectado e logado"
+    },
+    {
+      "from": "c6-2",
+      "to": "c7-8",
+      "why": "MCP fala com o runtime pelo canal local"
+    },
+    {
+      "from": "c6-2",
+      "to": "c1-5",
+      "why": "ferramenta de memória do DOT"
+    },
+    {
+      "from": "c6-2",
+      "to": "c4-7",
+      "why": "ferramenta de delegação"
+    },
+    {
+      "from": "c1-4",
+      "to": "c6-0",
+      "why": "exibe resultado da detecção"
+    },
+    {
+      "from": "c1-4",
+      "to": "c7-5",
+      "why": "ativa integração com o AGY"
+    },
+    {
+      "from": "c7-5",
+      "to": "c6-2",
+      "why": "registra o servidor MCP no AGY"
+    },
+    {
+      "from": "c4-4",
+      "to": "c10-1",
+      "why": "cria tarefa no horário marcado"
+    },
+    {
+      "from": "c4-5",
+      "to": "c10-1",
+      "why": "cria tarefa ao ocorrer evento"
+    },
+    {
+      "from": "c0-4",
+      "to": "c4-4",
+      "why": "CLI gerencia agendamentos"
+    },
+    {
+      "from": "c0-4",
+      "to": "c4-5",
+      "why": "CLI gerencia assinaturas"
+    },
+    {
+      "from": "c7-7",
+      "to": "c4-4",
+      "why": "runtime roda o agendador"
+    },
+    {
+      "from": "c7-7",
+      "to": "c8-1",
+      "why": "runtime processa a fila"
+    },
+    {
+      "from": "c7-7",
+      "to": "c7-8",
+      "why": "runtime expõe o canal local"
+    },
+    {
+      "from": "c0-0",
+      "to": "c7-8",
+      "why": "conecta pelo canal autenticado"
+    },
+    {
+      "from": "c0-0",
+      "to": "c7-7",
+      "why": "inicia o processo dotsd"
+    },
+    {
+      "from": "c0-1",
+      "to": "c7-7",
+      "why": "controla o processo"
+    },
+    {
+      "from": "c0-1",
+      "to": "c9-9",
+      "why": "aciona cópia de segurança"
+    },
+    {
+      "from": "c0-1",
+      "to": "c5-9",
+      "why": "exibe estado após ação"
+    },
+    {
+      "from": "c10-8",
+      "to": "c11-8",
+      "why": "modo launchd usa serviço do sistema"
+    },
+    {
+      "from": "c11-8",
+      "to": "c7-7",
+      "why": "launchd mantém o runtime"
+    },
+    {
+      "from": "c11-9",
+      "to": "c7-7",
+      "why": "sidecar fornece o binário do runtime"
+    },
+    {
+      "from": "c0-5",
+      "to": "c9-9",
+      "why": "gera backup"
+    },
+    {
+      "from": "c0-5",
+      "to": "c2-8",
+      "why": "consulta logs"
+    },
+    {
+      "from": "c0-5",
+      "to": "c8-1",
+      "why": "pausa todos os agentes"
+    },
+    {
+      "from": "c2-0",
+      "to": "c5-5",
+      "why": "resume tarefas em execução"
+    },
+    {
+      "from": "c2-0",
+      "to": "c2-1",
+      "why": "resume DOTs ativos"
+    },
+    {
+      "from": "c2-0",
+      "to": "c5-9",
+      "why": "mostra estado do serviço"
+    },
+    {
+      "from": "c2-0",
+      "to": "c1-0",
+      "why": "destaca aprovações pendentes"
+    },
+    {
+      "from": "c4-8",
+      "to": "c6-1",
+      "why": "agrega uso por motor"
+    },
+    {
+      "from": "c4-8",
+      "to": "c5-5",
+      "why": "lista execuções em andamento"
+    },
+    {
+      "from": "c2-8",
+      "to": "c7-7",
+      "why": "lê estatísticas do runtime"
+    },
+    {
+      "from": "c0-3",
+      "to": "c0-0",
+      "why": "guia início do serviço"
+    },
+    {
+      "from": "c0-3",
+      "to": "c6-0",
+      "why": "guia verificação dos assistentes"
+    },
+    {
+      "from": "c0-3",
+      "to": "c1-2",
+      "why": "guia criação do primeiro DOT"
+    },
+    {
+      "from": "c0-3",
+      "to": "c5-10",
+      "why": "marca onboarding concluído"
+    },
+    {
+      "from": "c5-10",
+      "to": "c11-8",
+      "why": "preferência de iniciar com o login"
+    },
+    {
+      "from": "c5-10",
+      "to": "c9-9",
+      "why": "preferência de backups"
+    }
+  ],
+  "provider": "claude",
+  "model": "claude-fable-5-1",
+  "at": 1792074950879
+}

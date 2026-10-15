@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  /* A janela nunca rola: cada painel (lista, conversa, perfil) rola por conta propria. */
+  overflow: hidden;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea, select { -webkit-user-select: text; user-select: text; }
+
+@layer components {
+  .btn-primary, .btn-secondary, .btn-danger, .btn-ghost {
+    @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply bg-indigo-600 text-white hover:bg-indigo-500; }
+  .btn-secondary { @apply bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700; }
+  .btn-danger { @apply bg-red-700/80 text-white hover:bg-red-600; }
+  .btn-ghost { @apply text-zinc-300 hover:bg-zinc-800; }
+  .input { @apply w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none; }
+  .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-400; }
+  .card { @apply rounded-lg border border-zinc-800 bg-zinc-900/60 p-4; }
+  .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
+}
