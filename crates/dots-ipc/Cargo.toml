@@ -1,0 +1,22 @@
+[package]
+name = "dots-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+dots-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = { version = "0.3", features = ["sink"] }
+tracing.workspace = true
+rand.workspace = true
+hex.workspace = true
+subtle.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
