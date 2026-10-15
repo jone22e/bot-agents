@@ -1,0 +1,14 @@
+{
+  "name": "dots",
+  "private": true,
+  "version": "0.3.0",
+  "description": "DOTS - plataforma desktop de agentes autonomos persistentes",
+  "scripts": {
+    "dev": "pnpm --filter desktop tauri dev",
+    "build": "pnpm --filter desktop tauri build",
+    "gen:types": "cargo test -p dots-core --quiet export_bindings",
+    "test:rust": "cargo test --workspace --exclude desktop",
+    "test:ui": "pnpm --filter desktop test"
+  },
+  "packageManager": "pnpm@12.4.2"
+}
