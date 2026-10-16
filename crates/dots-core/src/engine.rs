@@ -130,6 +130,71 @@ pub struct EngineConfiguration {
     pub updated_at: Timestamp,
 }
 
+/// Janela de consumo de uma assinatura: percentual usado e quando zera.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UsageWindow {
+    pub pct: f64,
+    pub resets_at: Option<Timestamp>,
+}
+
+/// Consumo da assinatura de um CLI. `error` quando nao foi possivel consultar (login vencido, sem rede).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProviderUsage {
+    pub five_hour: Option<UsageWindow>,
+    pub week: Option<UsageWindow>,
+    /// Ex.: "max 20x", "pro"; para o Antigravity, a conta conectada.
+    pub plan: Option<String>,
+    /// Quando o dado foi obtido.
+    pub at: Timestamp,
+    pub error: Option<String>,
+}
+
+/// Uso das assinaturas (como no ovrgit): Claude e ChatGPT (Codex) com janelas; Antigravity so a conta.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UsageInfo {
+    pub claude: Option<ProviderUsage>,
+    pub codex: Option<ProviderUsage>,
+    pub agy: Option<ProviderUsage>,
+}
+
+/// Versao instalada de um CLI e a mais recente publicada.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CliUpdateInfo {
+    pub current: String,
+    pub latest: Option<String>,
+    pub available: bool,
+}
+
+/// Situacao de atualizacao dos tres CLIs; `None` = nao instalado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CliUpdates {
+    pub claude: Option<CliUpdateInfo>,
+    pub codex: Option<CliUpdateInfo>,
+    pub agy: Option<CliUpdateInfo>,
+}
+
+impl CliUpdates {
+    pub fn get(&self, kind: EngineKind) -> &Option<CliUpdateInfo> {
+        match kind {
+            EngineKind::Claude => &self.claude,
+            EngineKind::Codex => &self.codex,
+            EngineKind::Agy => &self.agy,
+        }
+    }
+    pub fn set(&mut self, kind: EngineKind, v: Option<CliUpdateInfo>) {
+        match kind {
+            EngineKind::Claude => self.claude = v,
+            EngineKind::Codex => self.codex = v,
+            EngineKind::Agy => self.agy = v,
+        }
+    }
+}
+
 pub const MAX_MODEL_LEN: usize = 100;
 
 /// Normaliza um nome de modelo vindo da interface: vazio vira `None`; espacos e tamanho sao rejeitados
