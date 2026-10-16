@@ -60,6 +60,23 @@ async function setPaused(v: boolean) { await api.runtime.pauseAll(v); await ops.
 const readyEngines = computed(() => engines.items.filter((e) => e.last_detection?.installed));
 const usage = useUsageStore();
 const updater = useUpdaterStore();
+const MAX_CONCURRENT = "runtime.max_concurrent_executions";
+const maxConcurrent = computed(() => Number(settings.items[MAX_CONCURRENT] ?? 4));
+const concurrencyError = ref<string | null>(null);
+const concurrencyRestartNeeded = ref(false);
+async function setMaxConcurrent(el: HTMLInputElement) {
+  const n = Number(el.value);
+  if (!Number.isInteger(n) || n < 1 || n > 8) { el.value = String(maxConcurrent.value); return; }
+  if (n === maxConcurrent.value) return;
+  try {
+    await settings.set(MAX_CONCURRENT, n);
+    concurrencyError.value = null;
+    concurrencyRestartNeeded.value = true;
+  } catch (e) {
+    el.value = String(maxConcurrent.value);
+    concurrencyError.value = e instanceof Error ? e.message : String(e);
+  }
+}
 /** Limite de funcionarios que cada gerente pode contratar (o runtime usa 5 sem configuracao; aceita de 1 a 50). */
 const MAX_EMPLOYEES = "teams.max_employees_per_manager";
 const maxEmployees = computed(() => Number(settings.items[MAX_EMPLOYEES] ?? 5));
@@ -96,6 +113,15 @@ async function pickTheme(id: string) {
           <section class="card space-y-4">
             <div class="flex items-center gap-2 text-sm font-semibold text-zinc-200"><Activity :size="16" /> Trabalho dos DOTs</div>
             <Toggle :model-value="!paused" label="Permitir que os DOTs trabalhem" description="Desligue para pausar toda a fila. Nada e perdido; os trabalhos esperam ate religar." :disabled="!runtime.isConnected" @update:model-value="(v) => setPaused(!v)" />
+            <label class="flex items-center justify-between gap-4">
+              <span>
+                <span class="block text-sm text-zinc-200">Trabalhos simultâneos</span>
+                <span class="block text-xs text-zinc-500">Quantas tarefas podem ser executadas ao mesmo tempo, somando todos os DOTs. Padrão: 4.</span>
+              </span>
+              <input type="number" min="1" max="8" step="1" class="input w-20 text-center" :value="maxConcurrent" :disabled="!runtime.isConnected" @change="(e) => setMaxConcurrent(e.target as HTMLInputElement)" />
+            </label>
+            <p v-if="concurrencyRestartNeeded" class="text-xs text-amber-300">Limite salvo. Reinicie em Serviço em segundo plano quando os trabalhos atuais terminarem para aplicar.</p>
+            <ErrorBanner :message="concurrencyError" />
             <Toggle v-if="runtime.paths && !runtime.paths.dev_mode" :model-value="runtime.paths.start_at_login" label="Iniciar com o Mac" description="Gatilhos e horarios funcionam mesmo sem abrir o app." @update:model-value="(v) => runtime.setStartAtLogin(v)" />
           </section>
           <section class="card space-y-4">
