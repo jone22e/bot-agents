@@ -16,4 +16,8 @@ title: string | null,
 /**
  * Batimento na lista de contatos: live (trabalhando) | waiting (espera alguem) | standby (na fila) | error (ultimo trabalho falhou) | idle.
  */
-pulse: string, };
+pulse: string, 
+/**
+ * O trabalho mais recente do DOT terminou com sucesso (Visao geral: "Concluido").
+ */
+done: boolean, };

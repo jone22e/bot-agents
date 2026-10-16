@@ -38,6 +38,9 @@ pub struct Contact {
     /// Batimento na lista de contatos: live (trabalhando) | waiting (espera alguem) | standby (na fila) | error (ultimo trabalho falhou) | idle.
     #[serde(default)]
     pub pulse: String,
+    /// O trabalho mais recente do DOT terminou com sucesso (Visao geral: "Concluido").
+    #[serde(default)]
+    pub done: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
