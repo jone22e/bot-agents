@@ -2,6 +2,7 @@
 //! do SQLite, servidor IPC e supervisor de servicos.
 
 mod agy_setup;
+mod autonomy;
 mod browser;
 mod browser_ipc;
 mod cli;
@@ -227,7 +228,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         .ok()
         .flatten()
         .and_then(|s| s.value.as_u64())
-        .unwrap_or(2) as usize;
+        .unwrap_or(4) as usize;
     let dotsd_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dotsd"));
     let (watch_tx, watch_rx) = tokio::sync::mpsc::channel::<Vec<std::path::PathBuf>>(64);
     let watcher = Arc::new(std::sync::Mutex::new(watcher::Watcher::new(watch_tx)));
@@ -249,6 +250,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         path_dirs,
         dotsd_path,
         schedules_notify: tokio::sync::Notify::new(),
+        autonomy_lock: tokio::sync::Mutex::new(()),
         watcher: watcher.clone(),
         event_depths: std::sync::Mutex::new(std::collections::HashMap::new()),
         usage: crate::usage::UsageCache::default(),
@@ -293,6 +295,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
     tokio::spawn(scheduler::run(service.clone()));
     service.scheduler_notify.notify_one();
     tokio::spawn(schedules::run(service.clone()));
+    tokio::spawn(autonomy::run(service.clone()));
     tokio::spawn(watcher::run(service.clone(), watch_rx, watcher.clone()));
     service.refresh_watcher().await;
 

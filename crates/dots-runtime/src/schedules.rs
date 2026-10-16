@@ -104,9 +104,18 @@ pub async fn run(service: Arc<RuntimeService>) {
             }
         };
         for s in due {
+            let _autonomy_guard = service.autonomy_lock.lock().await;
             let next = next_run(s.kind, &s.spec, &dots_core::now()).ok();
             let (id, n) = (s.id.clone(), next);
             let _ = service.storage.call(move |st| st.schedules().mark_run(&id, n.as_ref())).await;
+            match service.skip_autonomy_schedule(&s).await {
+                Ok(true) => continue,
+                Err(e) => {
+                    tracing::warn!(schedule = %s.id, error = %e, "falha ao verificar agenda automatica");
+                    continue;
+                }
+                Ok(false) => {}
+            }
             let key = format!("schedule:{}:{}", s.id, s.next_run_at.map(|t| t.timestamp()).unwrap_or(0));
             let ev = service.emit_event(et::SCHEDULE_DUE, "scheduler", json!({ "schedule_id": s.id, "dot_id": s.dot_id, "prompt": s.prompt }), None, Some(key), 0).await;
             if let Ok(Some(ev)) = ev {

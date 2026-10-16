@@ -35,6 +35,7 @@ pub struct RuntimeService {
     pub path_dirs: Vec<PathBuf>,
     pub dotsd_path: PathBuf,
     pub schedules_notify: tokio::sync::Notify,
+    pub autonomy_lock: tokio::sync::Mutex<()>,
     pub watcher: Arc<std::sync::Mutex<crate::watcher::Watcher>>,
     /// Profundidade de encadeamento de eventos por tarefa (em memoria).
     pub event_depths: std::sync::Mutex<std::collections::HashMap<String, u32>>,
@@ -373,6 +374,11 @@ impl RuntimeService {
             "dots.get" => {
                 let IdParams { id } = p(params)?;
                 Ok(json!(self.storage.call(move |s| s.dots().get(&id)).await?))
+            }
+            "dots.start_autonomy" => {
+                let IdParams { id } = p(params)?;
+                self.start_autonomy(&id).await?;
+                Ok(json!({ "ok": true }))
             }
             "dots.workspaces" => {
                 let IdParams { id } = p(params)?;
@@ -967,6 +973,7 @@ impl RuntimeService {
                 "schedule" => Some(input.title.clone().unwrap_or_else(|| "Horario marcado".into())),
                 "delegation" => Some(input.title.clone().unwrap_or_else(|| "Pedido de outro DOT".into())),
                 "followup" => Some("Resultados chegaram; continuando".into()),
+                "autonomy" => Some("Iniciando o objetivo automaticamente".into()),
                 _ => None,
             };
             let (cid, role, content, meta) = (main.id.clone(), if note.is_some() { MessageRole::System } else { MessageRole::User }, note.clone().unwrap_or_else(|| input.prompt.clone()), json!({ "origin": origin, "prompt": input.prompt.chars().take(4000).collect::<String>() }));
