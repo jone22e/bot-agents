@@ -1,7 +1,7 @@
 //! Supervisao do processo `dotsd`.
 //!
 //! Producao (macOS): o binario embutido (sidecar) e copiado para
-//! `<data>/bin/dotsd-<versao>` e um LaunchAgent `com.c2s.dots.runtime` aponta
+//! `<data>/bin/dotsd` e um LaunchAgent `com.c2s.dots.runtime` aponta
 //! para essa copia estavel (nunca para dentro do .app, que muda em
 //! atualizacoes, ao mover o app e com App Translocation).
 //! Dev ou falha do launchd: spawn detached.
@@ -111,6 +111,11 @@ pub fn same_content(a: &Path, b: &Path) -> bool {
     }
 }
 
+fn installed_runtime_path(data: &Path) -> PathBuf {
+    // O Keychain guarda o caminho do executavel autorizado; um nome por versao pede nova permissao.
+    data.join("bin/dotsd")
+}
+
 /// O runtime em execucao esta desatualizado em relacao ao sidecar deste app?
 /// (versao diferente, ou mesma versao com binario instalado de conteudo diferente).
 pub fn runtime_is_stale(running_version: &str, data: &Path) -> bool {
@@ -118,37 +123,27 @@ pub fn runtime_is_stale(running_version: &str, data: &Path) -> bool {
     if version != running_version {
         return true;
     }
-    let installed = data.join("bin").join(format!("dotsd-{version}"));
+    let installed = installed_runtime_path(data);
     if !installed.exists() {
         return !dev_mode();
     }
     !same_content(&src, &installed)
 }
 
-/// Garante `<data>/bin/dotsd-<versao>` igual ao sidecar embutido. Retorna o caminho.
-pub fn install_runtime_binary(data: &Path) -> DotsResult<PathBuf> {
+/// Garante `<data>/bin/dotsd` igual ao sidecar embutido. Retorna o caminho e se ele mudou.
+pub fn install_runtime_binary(data: &Path) -> DotsResult<(PathBuf, bool)> {
     let src = bundled_dotsd().ok_or_else(|| DotsError::RuntimeUnavailable("binario dotsd nao encontrado no app".into()))?;
-    let version = dotsd_version(&src)?;
     let bin_dir = data.join("bin");
     std::fs::create_dir_all(&bin_dir)?;
-    let dest = bin_dir.join(format!("dotsd-{version}"));
+    let dest = installed_runtime_path(data);
     let needs_copy = !same_content(&src, &dest);
     if needs_copy {
-        let tmp = bin_dir.join(format!(".dotsd-{version}.tmp"));
+        let tmp = bin_dir.join(".dotsd.tmp");
         std::fs::copy(&src, &tmp)?;
         std::fs::rename(&tmp, &dest)?;
         tracing::info!(dest = %dest.display(), "runtime copiado para diretorio estavel");
-        // Mantem apenas a versao atual e a anterior.
-        let mut olds: Vec<PathBuf> = std::fs::read_dir(&bin_dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.file_name().map(|n| n.to_string_lossy().starts_with("dotsd-")).unwrap_or(false) && *p != dest)
-            .collect();
-        olds.sort();
-        while olds.len() > 1 {
-            let _ = std::fs::remove_file(olds.remove(0));
-        }
     }
-    Ok(dest)
+    Ok((dest, needs_copy))
 }
 
 /// Preferencia "iniciar com o Mac" (RunAtLoad). Guardada ao lado do plist para sobreviver a atualizacoes.
@@ -176,6 +171,10 @@ pub fn set_start_at_login(enabled: bool) -> DotsResult<()> {
 }
 
 fn latest_installed_binary(data: &Path) -> Option<PathBuf> {
+    let stable = installed_runtime_path(data);
+    if stable.is_file() {
+        return Some(stable);
+    }
     let mut bins: Vec<PathBuf> = std::fs::read_dir(data.join("bin")).ok()?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.file_name().map(|n| n.to_string_lossy().starts_with("dotsd-")).unwrap_or(false)).collect();
     bins.sort();
     bins.pop()
@@ -265,7 +264,7 @@ pub fn launchd_status() -> LaunchdStatus {
 }
 
 /// Escreve o plist (se mudou) e faz bootstrap. Retorna true se foi (re)carregado.
-pub fn launchd_install_and_start(binary: &Path, data: &Path) -> DotsResult<()> {
+pub fn launchd_install_and_start(binary: &Path, data: &Path, binary_changed: bool) -> DotsResult<()> {
     let plist = launch_agent_plist_path();
     if let Some(parent) = plist.parent() {
         std::fs::create_dir_all(parent)?;
@@ -273,12 +272,14 @@ pub fn launchd_install_and_start(binary: &Path, data: &Path) -> DotsResult<()> {
     let xml = plist_xml(binary, data);
     let changed = std::fs::read_to_string(&plist).map(|cur| cur != xml).unwrap_or(true);
     let status = launchd_status();
-    if changed {
+    if changed || binary_changed {
         if status.loaded {
-            let _ = launchctl(&["bootout", &format!("gui/{}/{}", uid(), LAUNCH_AGENT_LABEL)]);
+            launchd_stop()?;
         }
-        std::fs::write(&plist, xml)?;
-        tracing::info!(plist = %plist.display(), "LaunchAgent gravado");
+        if changed {
+            std::fs::write(&plist, xml)?;
+            tracing::info!(plist = %plist.display(), "LaunchAgent gravado");
+        }
     }
     let status = launchd_status();
     if !status.loaded {
@@ -351,16 +352,30 @@ pub fn process_alive(pid: u32) -> bool {
 
 /// Binario que deve ser usado para iniciar o runtime.
 /// Dev: o proprio build do workspace (ao lado do executavel). Producao: copia estavel.
-pub fn runtime_binary(data: &Path) -> DotsResult<PathBuf> {
+pub fn runtime_binary(data: &Path) -> DotsResult<(PathBuf, bool)> {
     if dev_mode() {
-        return bundled_dotsd().ok_or_else(|| DotsError::RuntimeUnavailable("dotsd nao encontrado ao lado do app (rode `cargo build -p dotsd`)".into()));
+        return bundled_dotsd().map(|path| (path, false)).ok_or_else(|| DotsError::RuntimeUnavailable("dotsd nao encontrado ao lado do app (rode `cargo build -p dotsd`)".into()));
     }
     install_runtime_binary(data)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::same_content;
+    use super::{latest_installed_binary, same_content};
+
+    #[test]
+    fn installed_runtime_prefers_stable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let old = bin.join("dotsd-0.4.1");
+        std::fs::write(&old, b"old").unwrap();
+        assert_eq!(latest_installed_binary(dir.path()), Some(old));
+
+        let stable = bin.join("dotsd");
+        std::fs::write(&stable, b"new").unwrap();
+        assert_eq!(latest_installed_binary(dir.path()), Some(stable));
+    }
 
     #[test]
     fn same_content_compares_bytes_not_only_length() {

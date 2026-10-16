@@ -56,10 +56,10 @@ impl RuntimeConnection {
             }
         }
 
-        let binary = supervisor::runtime_binary(&data)?;
+        let (binary, binary_changed) = supervisor::runtime_binary(&data)?;
         let mut used_launchd = false;
         if !supervisor::dev_mode() && cfg!(target_os = "macos") {
-            match supervisor::launchd_install_and_start(&binary, &data) {
+            match supervisor::launchd_install_and_start(&binary, &data, binary_changed) {
                 Ok(()) => used_launchd = true,
                 Err(e) => tracing::warn!(error = %e, "launchd indisponivel; usando spawn detached"),
             }
