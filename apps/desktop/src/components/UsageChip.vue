@@ -10,7 +10,7 @@ import { PROVIDER_LOGIN, PROVIDER_NAME, ago, resetsIn, useUsageStore } from "@/s
  * com a janela de 5 horas e quando cada limite zera, e se ha versao nova do CLI (com um botao que roda o
  * `update` do proprio CLI); CLIs ausentes aparecem com o botao de instalar.
  */
-const props = defineProps<{ /** Para onde o painel abre (na barra de baixo do mensageiro, para cima). */ opens?: "up" | "down" }>();
+const props = defineProps<{ /** Direcao em que o painel de detalhes abre. */ opens?: "up" | "down" }>();
 const store = useUsageStore();
 const open = ref(false);
 const root = ref<HTMLElement>();
