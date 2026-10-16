@@ -1,40 +1,31 @@
 <script setup lang="ts">
-// Grupo geral: o usuario escreve uma vez e todos os gerentes recebem (cada um na propria conversa);
-// as respostas deles aparecem aqui com o nome de quem respondeu. Mesmo desenho da conversa (ChatView).
+// Grupo geral: uma conversa em ordem de envio, com cada resposta identificada pelo gerente.
 // Digitar @ abre a lista de gerentes: os marcados respondem; os outros recebem so para ciencia.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import type { Dot, GroupMessage, Message } from "@dots/shared-types";
+import type { Dot, GroupMessage } from "@dots/shared-types";
 import { ArrowUp, Users } from "lucide-vue-next";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Avatar from "@/components/Avatar.vue";
-import ChatBubble from "@/components/ChatBubble.vue";
-import Heartbeat from "@/components/Heartbeat.vue";
-import { toneOf } from "@/lib/heartbeat";
+import { md, onMdClick } from "@/lib/markdown";
 import { useContactsStore } from "@/stores/contacts";
 import { useGroupStore } from "@/stores/group";
 import { useRuntimeStore } from "@/stores/runtime";
-import { useTeamsStore } from "@/stores/teams";
 
 const router = useRouter();
 const group = useGroupStore();
 const contacts = useContactsStore();
 const runtime = useRuntimeStore();
-const teams = useTeamsStore();
 const draft = ref("");
 const thread = ref<HTMLElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
 
-/** A bolha da conversa recebe uma Message; a resposta em andamento mostra o texto parcial. */
-function asMessage(m: GroupMessage): Message {
-  const live = m.task_id ? group.live[m.task_id] : undefined;
-  return { id: m.id, conversation_id: "", role: m.role, content: live && !m.content ? live : m.content, task_id: m.task_id, execution_id: null, metadata: m.metadata, created_at: m.created_at };
-}
-
-type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage; m: Message };
+type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage };
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
   let last = "";
   for (const g of group.messages) {
+    if ((g.metadata as { streaming?: boolean } | null)?.streaming) continue;
     const d = new Date(g.created_at);
     const day = d.toDateString();
     if (day !== last) {
@@ -42,17 +33,16 @@ const rows = computed<Row[]>(() => {
       const label = day === new Date().toDateString() ? "Hoje" : day === new Date(Date.now() - 86400000).toDateString() ? "Ontem" : d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
       out.push({ kind: "date", key: `d-${day}`, label });
     }
-    out.push({ kind: "msg", key: g.id, g, m: asMessage(g) });
+    out.push({ kind: "msg", key: g.id, g });
   }
   return out;
 });
-const mentionsOf = (g: GroupMessage) => ((g.metadata as { mentions?: { name: string }[] } | null)?.mentions ?? []).map((m) => m.name);
+const timeOf = (g: GroupMessage) => new Date(g.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 const titleOf = (dotId: string | null) => (dotId ? contacts.byDot(dotId)?.title ?? null : null);
-const teamOf = (dotId: string | null) => (dotId ? teams.managedBy(dotId)?.name ?? teams.memberOf(dotId)?.name ?? null : null);
 const working = computed(() => group.members.filter((d) => contacts.byDot(d.id)?.state === "busy"));
 
 async function load() {
-  if (runtime.isConnected) await Promise.all([group.load(), teams.load()]);
+  if (runtime.isConnected) await group.load();
 }
 onMounted(() => {
   group.open = true;
@@ -73,7 +63,7 @@ function scrollToEnd(force = false) {
     if (el) el.scrollTop = el.scrollHeight;
   });
 }
-watch(() => [group.messages.length, Object.values(group.live).join("").length], () => scrollToEnd());
+watch(() => [group.messages.length, rows.value.length], () => scrollToEnd());
 onMounted(() => scrollToEnd(true));
 
 // Marcacao com @: lista dos gerentes enquanto o texto antes do cursor termina em "@algo".
@@ -156,16 +146,9 @@ function autosize() {
 
 <template>
   <div class="chat flex h-full min-w-0 flex-col">
-    <header class="flex flex-col items-center gap-2 py-3" data-tauri-drag-region>
-      <span class="flex items-center gap-2 rounded-full bg-zinc-800/90 px-3 py-1.5 text-sm font-medium text-zinc-100"><Users :size="15" /> Grupo geral</span>
-      <div v-if="group.members.length" class="flex max-w-full flex-wrap justify-center gap-1.5 px-4">
-        <button v-for="d in group.members" :key="d.id" class="flex items-center gap-1.5 rounded-full border border-zinc-800 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800" :title="`Abrir a conversa com ${d.name}`" @click="router.push(`/chat/${d.id}`)">
-          <Avatar :name="d.name" size="sm" :state="contacts.byDot(d.id)?.state" />
-          <span class="max-w-[160px] truncate">{{ d.name }}</span>
-          <span v-if="teamOf(d.id)" class="max-w-[160px] truncate text-zinc-500">· {{ teamOf(d.id) }}</span>
-          <Heartbeat v-if="toneOf(contacts.byDot(d.id)?.pulse ?? 'idle') !== 'idle'" :tone="toneOf(contacts.byDot(d.id)?.pulse ?? 'idle')" />
-        </button>
-      </div>
+    <header class="group-header" data-tauri-drag-region>
+      <span class="group-icon"><Users :size="18" /></span>
+      <div><strong>Grupo geral</strong><small>{{ group.members.length }} {{ group.members.length === 1 ? "gerente" : "gerentes" }}</small></div>
     </header>
     <p v-if="group.error" class="mx-auto mb-2 rounded-md bg-red-950/40 px-3 py-1 text-xs text-red-200">{{ group.error }}</p>
 
@@ -178,16 +161,17 @@ function autosize() {
       </div>
       <template v-for="r in rows" :key="r.key">
         <p v-if="r.kind === 'date'" class="day">{{ r.label }}</p>
-        <div v-else-if="r.g.role === 'dot'" class="from">
-          <button class="who" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">
-            <Avatar :name="r.g.dot_name ?? '?'" size="sm" />
-            <strong>{{ r.g.dot_name }}</strong>
-            <span v-if="titleOf(r.g.dot_id)" class="ellipsis">{{ titleOf(r.g.dot_id) }}</span>
-            <span v-if="teamOf(r.g.dot_id)" class="ellipsis">· Equipe {{ teamOf(r.g.dot_id) }}</span>
-          </button>
-          <ChatBubble :message="r.m" />
+        <div v-else class="message-row" :class="r.g.role === 'user' ? 'mine' : 'theirs'">
+          <Avatar v-if="r.g.role === 'dot'" :name="r.g.dot_name ?? '?'" size="sm" />
+          <div class="message-body">
+            <button v-if="r.g.role === 'dot'" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
+            <div class="message-bubble">
+              <div v-if="r.g.role === 'dot'" class="md" @click="onMdClick($event, openUrl)" v-html="md(r.g.content)" />
+              <p v-else>{{ r.g.content }}</p>
+            </div>
+            <small>{{ timeOf(r.g) }}</small>
+          </div>
         </div>
-        <ChatBubble v-else :message="r.m" :mentions="mentionsOf(r.g)" />
       </template>
       <p v-if="working.length" class="progress"><span class="spinner tiny" /> {{ working.map((d) => d.name).join(", ") }} {{ working.length > 1 ? "estao" : "esta" }} trabalhando…</p>
     </main>
@@ -198,7 +182,6 @@ function autosize() {
           <Avatar :name="d.name" size="sm" />
           <strong>{{ d.name }}</strong>
           <span v-if="titleOf(d.id)" class="ellipsis">{{ titleOf(d.id) }}</span>
-          <span v-if="teamOf(d.id)" class="ellipsis">· Equipe {{ teamOf(d.id) }}</span>
         </li>
       </ul>
       <textarea
@@ -223,17 +206,30 @@ function autosize() {
   </div>
 </template>
 
-<!-- Estilos globais da conversa (.chat, .md...) vem do ChatView; aqui so o que muda no grupo -->
+<!-- Estilos globais da conversa (.chat, .md...) vem do ChatView. -->
 <style scoped>
-.thread { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px 22px 12px; display: flex; flex-direction: column; gap: 22px; }
+.group-header { display: flex; align-items: center; gap: 10px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
+.group-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; background: var(--panel-2); color: var(--text); }
+.group-header strong, .group-header small { display: block; }
+.group-header strong { font-size: 14px; color: var(--text); }
+.group-header small { font-size: 11px; color: var(--muted); }
+.thread { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px 22px 12px; display: flex; flex-direction: column; gap: 12px; }
 .empty { margin: auto; max-width: 520px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .empty h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .empty p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--faint); }
-.day { margin: 0; text-align: center; font-size: 11px; color: var(--faint); }
-.from { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.who { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; max-width: 100%; padding: 0; background: transparent; border: 0; font-size: 12px; color: var(--muted); }
-.who strong { color: var(--text); font-weight: 600; }
-.who:hover strong { text-decoration: underline; }
+.day { margin: 8px 0; text-align: center; font-size: 11px; color: var(--faint); }
+.message-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.message-row.mine { justify-content: flex-end; }
+.message-body { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: min(78%, 720px); min-width: 0; }
+.mine .message-body { align-items: flex-end; }
+.sender { padding: 0 4px; background: transparent; border: 0; color: var(--text); font-size: 12px; font-weight: 600; }
+.sender:hover { text-decoration: underline; }
+.message-bubble { padding: 9px 12px; border-radius: 15px 15px 15px 4px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: var(--agent-size); line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+.mine .message-bubble { border-radius: 15px 15px 4px 15px; background: var(--panel-2); }
+.message-bubble p { margin: 0; white-space: pre-wrap; }
+.message-bubble :deep(.md > :first-child) { margin-top: 0; }
+.message-bubble :deep(.md > :last-child) { margin-bottom: 0; }
+.message-body small { padding: 0 4px; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .progress { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px; }
 .composer {
   position: relative; flex: none; margin: 0 16px 16px; padding: 10px 10px 8px; border-radius: 18px;

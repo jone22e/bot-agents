@@ -20,7 +20,7 @@ export const useGroupStore = defineStore("group", {
   getters: {
     isMember: (s) => (dotId: string | undefined) => !!dotId && s.members.some((d) => d.id === dotId),
     /** Ultima mensagem do grupo (para a linha na lista de contatos). */
-    last: (s) => s.messages[s.messages.length - 1] ?? null,
+    last: (s) => [...s.messages].reverse().find((m) => !(m.metadata as { streaming?: boolean } | null)?.streaming) ?? null,
   },
   actions: {
     async loadMembers() {

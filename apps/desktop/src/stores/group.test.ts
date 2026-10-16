@@ -33,6 +33,7 @@ describe("group store", () => {
     invoke.mockImplementation(async (_c: string, a: { method: string }) => (a.method === "group.members" ? members : a.method === "group.messages" ? [user, reply] : null));
     const s = useGroupStore();
     await s.load();
+    expect(s.last?.id).toBe("g1");
     const ev = (text: string) => ({ task_id: "t1", dot_id: "m1", event: { type: "text_delta", text } as never });
     s.onExecutionEvent(ev("ignorado"));
     expect(s.live.t1).toBeUndefined();
