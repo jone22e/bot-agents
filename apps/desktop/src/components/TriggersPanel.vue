@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { Plus } from "lucide-vue-next";
-import type { ScheduleKind } from "@dots/shared-types";
+import type { Schedule, ScheduleKind } from "@dots/shared-types";
 import ErrorBanner from "@/components/ErrorBanner.vue";
 import { EVENT_TYPE_LABEL, describeSchedule, describeSubscription } from "@/lib/humanize";
 import { useAutomationStore } from "@/stores/automation";
@@ -15,6 +15,8 @@ const sched = reactive({ kind: "daily" as ScheduleKind, spec: "09:00", prompt: "
 /** Formularios ficam escondidos ate o usuario pedir para adicionar. */
 const addingTrigger = ref(false);
 const addingSchedule = ref(false);
+const editingSchedule = ref<string | null>(null);
+const scheduleDraft = reactive({ kind: "every" as ScheduleKind, spec: "60", prompt: "" });
 const dotName = (id: string) => dots.items.find((d) => d.id === id)?.name ?? "um DOT";
 const otherDots = computed(() => dots.items.filter((d) => d.id !== props.dotId));
 const needsPath = computed(() => trigger.event_type === "file.changed" || trigger.event_type === "git.commit.created");
@@ -33,13 +35,24 @@ async function addSchedule() {
   sched.prompt = "";
   addingSchedule.value = false;
 }
+function editSchedule(s: Schedule) {
+  scheduleDraft.kind = s.kind;
+  scheduleDraft.spec = s.spec;
+  scheduleDraft.prompt = s.prompt;
+  editingSchedule.value = s.id;
+}
+async function saveSchedule() {
+  if (!editingSchedule.value || !scheduleDraft.spec.trim() || !scheduleDraft.prompt.trim()) return;
+  await store.updateSchedule(editingSchedule.value, { kind: scheduleDraft.kind, spec: scheduleDraft.spec.trim(), prompt: scheduleDraft.prompt.trim() });
+  if (!store.error) editingSchedule.value = null;
+}
 const specHint: Record<ScheduleKind, string> = { every: "minutos, ex.: 30", daily: "HH:MM, ex.: 09:00", weekly: "dia(0=dom) HH:MM, ex.: 1 08:00", cron: "5 campos, ex.: 0 9 * * 1-5" };
 </script>
 
 <template>
   <div class="max-w-2xl space-y-5">
     <ErrorBanner :message="store.error" />
-    <p class="text-xs text-zinc-500">O DOT so trabalha quando voce pede, quando um gatilho dispara ou em um horario marcado. Nunca por conta propria.</p>
+    <p class="text-xs text-zinc-500">O DOT inicia seu objetivo ao ser criado. Gerentes recebem uma agenda de acompanhamento que você pode editar, pausar ou remover aqui.</p>
 
     <section class="card space-y-3">
       <div class="flex items-center justify-between gap-3">
@@ -84,16 +97,30 @@ const specHint: Record<ScheduleKind, string> = { every: "minutos, ex.: 30", dail
 
     <section class="card space-y-3">
       <div class="flex items-center justify-between gap-3">
-        <h3 class="text-sm font-semibold text-zinc-200">Em um horario marcado</h3>
+        <h3 class="text-sm font-semibold text-zinc-200">Agenda de trabalho</h3>
         <button v-if="!addingSchedule" class="btn-secondary" @click="addingSchedule = true"><Plus :size="14" /> Horario</button>
       </div>
       <ul v-if="store.schedules.length" class="divide-y divide-zinc-800 text-sm">
-        <li v-for="s in store.schedules" :key="s.id" class="flex items-center justify-between gap-3 py-2">
-          <span :class="s.enabled ? 'text-zinc-200' : 'text-zinc-500 line-through'">{{ describeSchedule(s) }}: "{{ s.prompt }}"<span v-if="s.next_run_at" class="ml-2 text-xs text-zinc-500">proximo {{ new Date(s.next_run_at).toLocaleString() }}</span></span>
-          <span class="flex shrink-0 gap-2 text-xs">
-            <button class="text-indigo-400 hover:underline" @click="store.updateSchedule(s.id, { enabled: !s.enabled })">{{ s.enabled ? "pausar" : "ativar" }}</button>
-            <button class="text-red-300 hover:underline" @click="store.deleteSchedule(s.id)">remover</button>
-          </span>
+        <li v-for="s in store.schedules" :key="s.id" class="py-2">
+          <div class="flex items-center justify-between gap-3">
+            <span :class="s.enabled ? 'text-zinc-200' : 'text-zinc-500 line-through'">{{ describeSchedule(s) }}: "{{ s.prompt }}"<span v-if="s.next_run_at" class="ml-2 text-xs text-zinc-500">próximo {{ new Date(s.next_run_at).toLocaleString() }}</span></span>
+            <span class="flex shrink-0 gap-2 text-xs">
+              <button class="text-indigo-400 hover:underline" @click="editSchedule(s)">editar</button>
+              <button class="text-indigo-400 hover:underline" @click="store.updateSchedule(s.id, { enabled: !s.enabled })">{{ s.enabled ? "pausar" : "ativar" }}</button>
+              <button class="text-red-300 hover:underline" @click="store.deleteSchedule(s.id)">remover</button>
+            </span>
+          </div>
+          <div v-if="editingSchedule === s.id" class="mt-3 space-y-2 rounded-lg border border-zinc-800 p-3">
+            <div class="grid grid-cols-[150px_1fr] gap-3">
+              <select v-model="scheduleDraft.kind" class="input"><option value="every">a cada N minutos</option><option value="daily">todo dia</option><option value="weekly">toda semana</option><option value="cron">cron</option></select>
+              <input v-model="scheduleDraft.spec" class="input font-mono text-xs" :placeholder="specHint[scheduleDraft.kind]" />
+            </div>
+            <input v-model="scheduleDraft.prompt" class="input" placeholder="O que o DOT deve fazer" @keyup.enter="saveSchedule" />
+            <div class="flex justify-end gap-2">
+              <button class="btn-ghost" @click="editingSchedule = null">Cancelar</button>
+              <button class="btn-primary" :disabled="!scheduleDraft.spec.trim() || !scheduleDraft.prompt.trim()" @click="saveSchedule">Salvar</button>
+            </div>
+          </div>
         </li>
       </ul>
       <p v-else-if="!addingSchedule" class="text-xs text-zinc-500">Nenhum horario. Ex.: todo dia as 9h, verificar os testes.</p>
