@@ -10,10 +10,11 @@ describe("chat store (uma conversa por DOT)", () => {
   beforeEach(() => { setActivePinia(createPinia()); invoke.mockReset(); });
 
   it("open resolves the main conversation and loads messages", async () => {
+    const startedAt = new Date(Date.now() - 7 * 60_000).toISOString();
     invoke.mockImplementation(async (_c: string, a: { method: string }) => {
       if (a.method === "conversations.main") return { id: "c1", dot_id: "d1" };
       if (a.method === "conversations.messages") return [{ id: "m1", role: "user", content: "oi" }];
-      if (a.method === "tasks.list") return [{ id: "t1", status: "RUNNING" }];
+      if (a.method === "tasks.list") return [{ id: "t1", status: "RUNNING", started_at: startedAt }];
       return null;
     });
     const s = useChatStore();
@@ -22,6 +23,10 @@ describe("chat store (uma conversa por DOT)", () => {
     expect(s.messages).toHaveLength(1);
     expect(s.live.status).toBe("running");
     expect(s.live.taskId).toBe("t1");
+    expect(s.live.since).toBe(Date.parse(startedAt));
+    await s.open("d1");
+    expect(s.live.since).toBe(Date.parse(startedAt));
+    expect(invoke.mock.calls.filter(([, a]) => a.method === "conversations.send")).toHaveLength(0);
   });
 
   it("sends a message with only attachments", async () => {
