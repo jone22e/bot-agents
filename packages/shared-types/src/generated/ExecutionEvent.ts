@@ -5,4 +5,8 @@ import type { RiskLevel } from "./RiskLevel";
 /**
  * Evento normalizado de execucao, igual para todos os motores.
  */
-export type ExecutionEvent = { "type": "started", engine_session_id: string | null, } | { "type": "text_delta", text: string, } | { "type": "text", text: string, } | { "type": "reasoning", text: string, } | { "type": "tool_call", call_id: string, name: string, input: unknown, } | { "type": "tool_result", call_id: string, name: string, ok: boolean, output: string, } | { "type": "permission_requested", approval_id: string, tool: string, risk: RiskLevel, } | { "type": "permission_resolved", approval_id: string, approved: boolean, } | { "type": "usage", input_tokens: number | null, output_tokens: number | null, cost_usd: number | null, } | { "type": "notice", level: string, text: string, } | { "type": "completed", result_text: string, } | { "type": "failed", kind: FailureKind, message: string, } | { "type": "raw", line: string, };
+export type ExecutionEvent = { "type": "started", engine_session_id: string | null, } | { "type": "text_delta", text: string, } | { "type": "text", text: string, } | { "type": "reasoning", text: string, } | { "type": "tool_call", call_id: string, name: string, input: unknown, } | { "type": "tool_result", call_id: string, name: string, ok: boolean, output: string, } | { "type": "permission_requested", approval_id: string, tool: string, risk: RiskLevel, } | { "type": "permission_resolved", approval_id: string, approved: boolean, } | { "type": "usage", input_tokens: number | null, output_tokens: number | null, cost_usd: number | null, 
+/**
+ * Tamanho do contexto na ultima chamada ao modelo (entrada + cache), quando o motor informa.
+ */
+context_tokens: number | null, } | { "type": "notice", level: string, text: string, } | { "type": "completed", result_text: string, } | { "type": "failed", kind: FailureKind, message: string, } | { "type": "raw", line: string, };

@@ -7,10 +7,13 @@ export type { AuditLog } from "./generated/AuditLog";
 export type { AuthStatus } from "./generated/AuthStatus";
 export type { AutoApproveLevel } from "./generated/AutoApproveLevel";
 export type { Checkpoint } from "./generated/Checkpoint";
+export type { CliUpdateInfo } from "./generated/CliUpdateInfo";
+export type { CliUpdates } from "./generated/CliUpdates";
 export type { ConnectionStatus } from "./generated/ConnectionStatus";
 export type { Contact } from "./generated/Contact";
 export type { Conversation } from "./generated/Conversation";
 export type { Delegation } from "./generated/Delegation";
+export type { Dismissal } from "./generated/Dismissal";
 export type { DelegationStatus } from "./generated/DelegationStatus";
 export type { Dot } from "./generated/Dot";
 export type { DotCreate } from "./generated/DotCreate";
@@ -35,6 +38,8 @@ export type { ExecutionEvent } from "./generated/ExecutionEvent";
 export type { ExecutionEventRecord } from "./generated/ExecutionEventRecord";
 export type { ExecutionStatus } from "./generated/ExecutionStatus";
 export type { FailureKind } from "./generated/FailureKind";
+export type { GroupMessage } from "./generated/GroupMessage";
+export type { LearnedPermission } from "./generated/LearnedPermission";
 export type { FlexiConnectInput } from "./generated/FlexiConnectInput";
 export type { Installation } from "./generated/Installation";
 export type { Memory } from "./generated/Memory";
@@ -44,6 +49,7 @@ export type { MemoryUpdate } from "./generated/MemoryUpdate";
 export type { Message } from "./generated/Message";
 export type { MessageRole } from "./generated/MessageRole";
 export type { ProcessSample } from "./generated/ProcessSample";
+export type { ProviderUsage } from "./generated/ProviderUsage";
 export type { RiskLevel } from "./generated/RiskLevel";
 export type { RuntimeMode } from "./generated/RuntimeMode";
 export type { RuntimeStats } from "./generated/RuntimeStats";
@@ -65,6 +71,8 @@ export type { TeamCreate } from "./generated/TeamCreate";
 export type { TeamUpdate } from "./generated/TeamUpdate";
 export type { ToolPolicy } from "./generated/ToolPolicy";
 export type { ToolPolicyUpdate } from "./generated/ToolPolicyUpdate";
+export type { UsageInfo } from "./generated/UsageInfo";
+export type { UsageWindow } from "./generated/UsageWindow";
 export type { WorkspaceChange } from "./generated/WorkspaceChange";
 
 /** Evento push do runtime (frame `{event, payload, seq}`). */
@@ -139,27 +147,19 @@ export interface AgySetupStatus {
   configured: boolean;
 }
 
-/** Modelo de papel para o Flexi (`apps.flexi.templates`). */
+/** Especialidade de gerente do Flexi (`apps.flexi.templates`): o gerente contrata os funcionarios e define o que cada um faz. */
 export interface FlexiRoleTemplate {
   id: string;
   name: string;
+  /** Sempre "supervisor": especialidade e de gerente. */
   role: "worker" | "supervisor";
   trust: "none" | "read" | "write" | "exec";
   purpose: string;
-  team: string[];
-  /** Area de trabalho: marketplaces | mercadolivre | shopee | googleads | publicacao */
+  /** Setor do sistema no Flexi (ex.: mercadolivre, compras). */
   group: string;
-  /** Nome da equipe que este papel gerencia (se gerente). */
+  /** Nome do setor (ex.: "Mercado Livre"). */
+  group_name: string;
+  /** Nome da equipe que este gerente gerencia (o nome do setor). */
   manages: string | null;
-  /** Nome da equipe de que este papel e funcionario. */
-  member_of: string | null;
 }
 
-/** Areas de trabalho dos DOTs do Flexi, na ordem da hierarquia. */
-export const FLEXI_GROUPS: { id: string; name: string }[] = [
-  { id: "marketplaces", name: "Marketplaces (tudo)" },
-  { id: "mercadolivre", name: "Mercado Livre" },
-  { id: "shopee", name: "Shopee" },
-  { id: "googleads", name: "Google Ads" },
-  { id: "publicacao", name: "Publicacao" },
-];
