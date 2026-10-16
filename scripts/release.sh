@@ -111,6 +111,7 @@ git log --no-merges --format='- %s' ${PREV:+"$PREV"..}HEAD | grep -v '^- chore: 
 [ -s "$NOTES" ] || echo "- Melhorias e correções" > "$NOTES"
 
 step "Testes"
+cargo build -p dotsd  # testes e2e executam target/debug/dotsd; atualize-o apos subir a versao
 cargo test --workspace
 (cd apps/desktop && ./node_modules/.bin/vitest run)
 
