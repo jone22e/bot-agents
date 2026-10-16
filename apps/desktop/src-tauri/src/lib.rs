@@ -4,9 +4,11 @@
 
 mod commands;
 mod connection;
+mod media;
 mod supervisor;
+mod updater;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent, WindowEvent};
 
 pub use connection::RuntimeConnection;
 
@@ -27,6 +29,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(RuntimeConnection::new())
         .invoke_handler(tauri::generate_handler![
             commands::ipc_call,
@@ -37,8 +40,23 @@ pub fn run() {
             commands::runtime_launchd_status,
             commands::app_paths,
             commands::runtime_set_start_at_login,
+            media::transcribe_audio,
+            media::image_preview,
+            updater::update_state,
+            updater::update_check,
+            updater::update_download,
+            updater::update_install,
+            updater::update_set_auto,
         ])
+        // Janela de volta ao primeiro plano: procura versao nova (se faz tempo desde a ultima tentativa).
+        .on_window_event(|window, event| {
+            if let WindowEvent::Focused(true) = event {
+                updater::on_focus(window.app_handle());
+            }
+        })
         .setup(|app| {
+            app.manage(updater::Updater::new(app.handle()));
+            updater::start(app.handle());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let conn = handle.state::<RuntimeConnection>();
@@ -49,6 +67,12 @@ pub fn run() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Versao nova ja baixada e o usuario nao reiniciou: instala ao fechar.
+            if let RunEvent::Exit = event {
+                updater::install_on_exit(app);
+            }
+        });
 }

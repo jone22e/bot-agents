@@ -25,10 +25,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "externalBin": ["binaries/dotsd"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "externalBin": [
+      "binaries/dotsd",
+      "binaries/dots-transcribe"
+    ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "entitlements": "Entitlements.plist"
     },
     "icon": [
       "icons/32x32.png",
@@ -37,5 +44,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg1QzlGRkQ5NjZFNTdEMDIKUldRQ2ZlVm0yZi9KaForRlpGNFc2RDE0eC9IRGZRWURBcnE0N0U3NVRNb3g2Z1BwTlRIUEx1MGQK",
+      "endpoints": [
+        "https://github.com/jone22e/bot-agents/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

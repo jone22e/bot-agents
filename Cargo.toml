@@ -39,6 +39,7 @@ ts-rs = { version = "11", features = ["serde-compat", "chrono-impl"] }
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 rand = "0.9"
 hex = "0.4"
+base64 = "0.22"
 subtle = "2"
 libc = "0.2"
 dirs = "6"

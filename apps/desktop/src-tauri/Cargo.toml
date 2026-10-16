@@ -26,4 +26,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true
 libc.workspace = true
+base64.workspace = true
 tauri-plugin-dialog = "2"
+# sem o recurso "zip" (so o Windows usa; todas as versoes do zip 4 foram retiradas do crates.io)
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+
+[dev-dependencies]
+tempfile.workspace = true
