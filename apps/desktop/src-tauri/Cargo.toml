@@ -31,5 +31,11 @@ tauri-plugin-dialog = "2"
 # sem o recurso "zip" (so o Windows usa; todas as versoes do zip 4 foram retiradas do crates.io)
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
 
+# instalacao da atualizacao no macOS sem trocar a pasta DOTS.app (ver updater::install_keeping_bundle)
+[target.'cfg(target_os = "macos")'.dependencies]
+flate2 = "1"
+tar = "0.4"
+tempfile.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

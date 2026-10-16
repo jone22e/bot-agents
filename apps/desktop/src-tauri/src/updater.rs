@@ -263,9 +263,100 @@ async fn download_update(app: &AppHandle, update: Update) {
 fn install_ready(app: &AppHandle) -> Result<bool, String> {
     let ready = app.state::<Updater>().ready.lock().unwrap().take();
     let Some((update, bytes)) = ready else { return Ok(false) };
-    update.install(bytes).map_err(|e| e.to_string())?;
+    install(&update, &bytes)?;
     tracing::info!(version = %update.version, "atualizacao instalada");
     Ok(true)
+}
+
+/// No macOS troca so o `Contents` de dentro do DOTS.app; se nao der antes de mexer no app (sem permissao, outro
+/// disco), cai na instalacao do Tauri. Nos outros sistemas, sempre a do Tauri.
+fn install(update: &Update, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        update.verify(bytes).map_err(|e| e.to_string())?;
+        match std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| bundle_of(&exe)) {
+            Ok(bundle) => match install_keeping_bundle(&bundle, bytes) {
+                Ok(()) => return Ok(()),
+                Err(e) => tracing::warn!(error = %e, "instalacao mantendo a pasta do app falhou; usando a do Tauri"),
+            },
+            Err(e) => tracing::warn!(error = %e, "app fora de um pacote .app; usando a instalacao do Tauri"),
+        }
+    }
+    update.install(bytes).map_err(|e| e.to_string())
+}
+
+/// Pasta `X.app` de um executavel em `X.app/Contents/MacOS/<binario>`.
+#[cfg(target_os = "macos")]
+fn bundle_of(exe: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let contents = exe.parent().filter(|d| d.ends_with("MacOS")).and_then(|d| d.parent()).filter(|d| d.ends_with("Contents"));
+    contents
+        .and_then(|c| c.parent())
+        .filter(|b| b.extension().is_some_and(|e| e == "app"))
+        .map(|b| b.to_path_buf())
+        .ok_or_else(|| format!("{} nao esta dentro de um pacote .app", exe.display()))
+}
+
+/// Instala a versao nova trocando so `DOTS.app/Contents`. O Tauri troca a pasta DOTS.app inteira; a pasta nova e
+/// outro arquivo para o macOS e o icone fixado no Dock (que guarda a referencia da pasta) deixa de reconhecer o app
+/// aberto: aparece um segundo icone e e preciso fixar de novo a cada atualizacao. Mantendo a pasta, o Dock segue.
+/// Erros antes da troca deixam o app como estava; a troca e um passo so (`renamex_np` com RENAME_SWAP).
+#[cfg(target_os = "macos")]
+fn install_keeping_bundle(bundle: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let err = |e: std::io::Error| e.to_string();
+    let current = bundle.join("Contents");
+    // renames so funcionam no mesmo disco: pasta temporaria do sistema se for o disco do app, senao ao lado dele
+    let dev = std::fs::metadata(bundle).map_err(err)?.dev();
+    let root = [Some(std::env::temp_dir()), bundle.parent().map(|p| p.to_path_buf())]
+        .into_iter()
+        .flatten()
+        .find(|d| d.metadata().is_ok_and(|m| m.dev() == dev))
+        .ok_or("nenhuma pasta temporaria no disco do app")?;
+    let tmp = tempfile::Builder::new().prefix("dots_update").tempdir_in(&root).map_err(err)?;
+    // o pacote do Tauri e `DOTS.app/...`: tira o primeiro nivel
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    for entry in archive.entries().map_err(err)? {
+        let mut entry = entry.map_err(err)?;
+        let rel: std::path::PathBuf = entry.path().map_err(err)?.components().skip(1).collect();
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let dest = tmp.path().join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(err)?;
+        }
+        entry.unpack(&dest).map_err(err)?;
+    }
+    let staged = tmp.path().join("Contents");
+    if !staged.join("Info.plist").is_file() {
+        return Err("pacote da atualizacao sem Contents/Info.plist".into());
+    }
+    swap(&staged, &current).or_else(|e| {
+        // disco sem troca atomica (HFS+): duas renomeacoes, desfazendo se a segunda falhar
+        tracing::debug!(error = %e, "sem troca atomica; movendo as pastas");
+        let backup = tmp.path().join("Contents.old");
+        std::fs::rename(&current, &backup).map_err(err)?;
+        std::fs::rename(&staged, &current).map_err(|e| {
+            let _ = std::fs::rename(&backup, &current);
+            e.to_string()
+        })
+    })?;
+    // o Contents antigo fica na pasta temporaria, apagada ao sair daqui. O LaunchServices rele a versao do app.
+    if !cfg!(test) {
+        let _ = std::process::Command::new("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+            .arg("-f")
+            .arg(bundle)
+            .output();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn swap(a: &std::path::Path, b: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    let (a, b) = (std::ffi::CString::new(a.as_os_str().as_bytes()).map_err(|e| e.to_string())?, std::ffi::CString::new(b.as_os_str().as_bytes()).map_err(|e| e.to_string())?);
+    // SAFETY: os dois ponteiros sao strings terminadas em NUL validas durante a chamada.
+    if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) } == 0 { Ok(()) } else { Err(std::io::Error::last_os_error().to_string()) }
 }
 
 /// Ao fechar o app: instala a versao pronta, se houver (a proxima abertura ja e a nova).
@@ -330,5 +421,57 @@ mod tests {
         assert!(!is_newer("0.4.0", "0.4.0"));
         assert!(!is_newer("0.4.0-beta.1", "0.4.0"));
         assert!(!is_newer("0.3.9", "0.4.0"));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod install_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    fn package(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        for (path, body) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            tar.append_data(&mut h, path, body.as_bytes()).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn update_keeps_the_app_folder_so_the_dock_still_knows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("DOTS.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), "velho").unwrap();
+        std::fs::write(app.join("Contents/MacOS/antigo"), "x").unwrap();
+        let inode = std::fs::metadata(&app).unwrap().ino();
+
+        install_keeping_bundle(&app, &package(&[("DOTS.app/Contents/Info.plist", "novo"), ("DOTS.app/Contents/MacOS/desktop", "bin")])).unwrap();
+
+        assert_eq!(std::fs::metadata(&app).unwrap().ino(), inode, "a pasta DOTS.app continua a mesma");
+        assert_eq!(std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap(), "novo");
+        assert!(app.join("Contents/MacOS/desktop").is_file());
+        assert!(!app.join("Contents/MacOS/antigo").exists(), "nada do Contents antigo sobra");
+        assert_eq!(std::fs::read_dir(&app).unwrap().count(), 1, "so o Contents na raiz do app");
+    }
+
+    #[test]
+    fn broken_package_leaves_the_app_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("DOTS.app");
+        std::fs::create_dir_all(app.join("Contents")).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), "velho").unwrap();
+        assert!(install_keeping_bundle(&app, &package(&[("DOTS.app/Contents/MacOS/desktop", "bin")])).is_err());
+        assert_eq!(std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap(), "velho");
+    }
+
+    #[test]
+    fn bundle_of_finds_the_app_folder() {
+        assert_eq!(bundle_of(std::path::Path::new("/Applications/DOTS.app/Contents/MacOS/desktop")).unwrap(), std::path::PathBuf::from("/Applications/DOTS.app"));
+        assert!(bundle_of(std::path::Path::new("/Users/x/target/debug/desktop")).is_err());
     }
 }
