@@ -27,9 +27,10 @@ fn settings_path(home: &Path) -> PathBuf {
 
 fn expected_rules() -> Vec<String> {
     tool_definitions()
-        .iter()
-        .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
-        .filter(|n| *n != "permission_prompt")
+        .into_iter()
+        .chain(dots_flexi::tool_definitions())
+        .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .filter(|n| n != "permission_prompt")
         .map(|n| format!("mcp(dots/{n})"))
         .collect()
 }
@@ -147,6 +148,8 @@ mod tests {
     fn expected_rules_cover_all_tools_except_permission_prompt() {
         let r = expected_rules();
         assert!(r.contains(&"mcp(dots/dots_write_file)".to_string()));
+        assert!(r.contains(&"mcp(dots/flexi_ads_status)".to_string()));
+        assert!(r.contains(&"mcp(dots/flexi_publicar_anuncio)".to_string()));
         assert!(!r.iter().any(|x| x.contains("permission_prompt")));
     }
 }
