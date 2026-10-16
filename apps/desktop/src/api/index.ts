@@ -71,6 +71,7 @@ export const api = {
   dots: {
     list: (includeArchived = false) => ipcCall<Dot[]>("dots.list", { include_archived: includeArchived }),
     get: (id: string) => ipcCall<Dot>("dots.get", { id }),
+    startAutonomy: (id: string) => ipcCall<{ ok: boolean }>("dots.start_autonomy", { id }),
     create: (input: DotCreate) => ipcCall<Dot>("dots.create", input),
     update: (id: string, patch: DotUpdate) => ipcCall<Dot>("dots.update", { id, patch }),
     duplicate: (id: string, name?: string) => ipcCall<Dot>("dots.duplicate", { id, name: name ?? null }),
