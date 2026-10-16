@@ -84,12 +84,12 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
 .ball { position: relative; display: inline-flex; height: 2rem; width: 2rem; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 9999px; color: white; }
 .ball.working { background: #8b5cf6; }
 .ball.working::after { content: ""; position: absolute; inset: -4px; border-radius: 9999px; border: 3px solid rgb(139 92 246 / 0.25); border-top-color: rgb(139 92 246 / 0.8); animation: spin 1.1s linear infinite; }
-.ball.done { background: #8b5cf6; }
+.ball.done { background: #22c55e; }
 .ball.waiting { background: #f97316; }
 .ball.idle { background: #3f3f46; }
 .legend { display: inline-flex; height: 0.75rem; width: 0.75rem; align-items: center; justify-content: center; border-radius: 9999px; color: white; }
 .legend.working { background: #8b5cf6; box-shadow: 0 0 0 2px rgb(139 92 246 / 0.35); }
-.legend.done { background: #8b5cf6; }
+.legend.done { background: #22c55e; }
 .legend.waiting { background: #f97316; }
 .legend.idle { background: #3f3f46; }
 @keyframes spin { to { transform: rotate(360deg); } }
