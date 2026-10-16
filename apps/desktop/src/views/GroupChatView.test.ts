@@ -44,4 +44,30 @@ describe("Grupo geral", () => {
     expect(rows[2]?.classes()).toContain("theirs");
     expect(wrapper.find("main").text()).not.toContain("Parcial");
   });
+
+  it("divide uma resposta longa em bolhas curtas sem alterar a ordem da conversa", async () => {
+    const messages = [
+      { id: "u1", role: "user", content: "Como está?", dot_id: null, dot_name: null, task_id: null, metadata: null, created_at: "2026-10-16T12:00:00Z" },
+      { id: "r1", role: "dot", content: `Primeiro: ${"a".repeat(260)}\n\n- Etapa um: ${"b".repeat(260)}\n- Etapa dois: ${"c".repeat(260)}`, dot_id: "carolina", dot_name: "Carolina", task_id: "t1", metadata: {}, created_at: "2026-10-16T12:01:00Z" },
+      { id: "u2", role: "user", content: "Obrigado", dot_id: null, dot_name: null, task_id: null, metadata: null, created_at: "2026-10-16T12:02:00Z" },
+    ] as GroupMessage[];
+    invoke.mockImplementation(async (_command: string, args: { method: string }) => {
+      if (args.method === "group.members") return [{ id: "carolina", name: "Carolina" }];
+      if (args.method === "group.messages") return messages;
+      throw new Error(`chamada inesperada: ${args.method}`);
+    });
+    useRuntimeStore().connection = "connected";
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/", component: GroupChatView }, { path: "/chat/:id", component: { template: "<div />" } }] });
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(GroupChatView, { global: { plugins: [router], stubs: { Avatar: true } } });
+    await flushPromises();
+
+    const rows = wrapper.findAll(".message-row");
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => row.find(".message-bubble").text().slice(0, 8))).toEqual(["Como est", "Primeiro", "Etapa um", "Etapa do", "Obrigado"]);
+    expect(rows[1]?.find(".sender").text()).toBe("Carolina");
+    expect(rows[2]?.find(".sender").exists()).toBe(false);
+    expect(rows[2]?.classes()).toContain("continuation");
+  });
 });
