@@ -21,6 +21,16 @@ Data: 2026-10-15. Plataforma validada: macOS 26.2, Apple Silicon. Versao: 0.3.0.
   (tarefa `question:<id>` no gerente, que responde com `dots_answer_question`); a delegacao fica aberta ate a resposta e a
   continuacao do funcionario vira a nova tarefa filha, de modo que o gerente so consolida depois. Pergunta expirada gera a
   continuacao "sem resposta" para nao travar a delegacao. `dotsd call <metodo> [json]` chama qualquer metodo IPC do runtime.
+- **Permissao pelo gerente**: pedido de permissao de um funcionario em pedido delegado vira a tarefa `approval:<id>` no
+  gerente, que decide com `dots_decide_approval` (o cartao continua na conversa do funcionario como alternativa para o
+  usuario); na lista o funcionario aparece como "Pediu permissao ao gerente". Reinicio do runtime recoloca na fila toda
+  tarefa interrompida enquanto `attempts <= max_attempts` (antes so as `retry_safe`): fechar e reabrir o app nao
+  adormece os agentes.
+- **Gerente responsavel pela equipe**: `dots_delegation_status` mostra o estado real do funcionario (na fila, trabalhando,
+  parado com o erro, aguardando resposta); `dots_resume_delegation` recoloca na fila a tarefa parada/falha/cancelada de
+  uma delegacao sua; as instrucoes do Supervisor mandam consultar o status antes de responder sobre andamento e retomar
+  em vez de so relatar. Pedidos delegados interrompidos por reinicio do runtime voltam a fila sozinhos (nao ficam
+  "aguardando o usuario"), porque o gerente espera por eles e os pontos de controle evitam repetir acoes.
 - **Central de operacoes** em Atividades e Visao geral; "iniciar com o Mac" em Configuracoes; retomar trabalho parado.
 - **Migracao 0003** nova; 0001 e 0002 intocadas.
 

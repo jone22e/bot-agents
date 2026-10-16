@@ -28,6 +28,13 @@ Data: 2026-10-15. Plano aprovado em `docs/PHASE-FLEXI-PLAN.md`. Nenhuma alteraca
   ao Flexi recebe `FLEXI_CONTEXT` nas instrucoes (`crates/dots-runtime/src/flexi.rs`): numeros dos marketplaces e a
   distincao entre anuncio no Google Shopping (catalogo) e campanha no Google Ads (midia); os papeis do Google
   (`ads_manager`, `ads_agent`, `publisher`) foram reescritos com esse entendimento.
+- **Navegador no Flexi**: `dots_browser_open` em URL do host da conexao Flexi do DOT e permitido sem "acesso a internet"
+  e com risco de leitura; antes de navegar o runtime injeta o cookie `userdata` da conexao no navegador do DOT
+  (`browser_login_for_app`, CDP `Network.setCookie`), entao a pagina abre logada e aparece no painel Computador. Nas
+  execucoes do Codex os servidores MCP do proprio usuario (`cua_repl`, `node_repl`, `computer-use`, `codex_app` e os
+  do `config.toml`) sao desligados com `-c mcp_servers.<nome>.command="/usr/bin/true" -c mcp_servers.<nome>.enabled=false`
+  (so `enabled=false` falha com "invalid transport" para servidores de plugin; verificado em `codex mcp list`), porque o
+  computer use do Codex nega permissao sozinho em modo nao interativo e o usuario nao ve nada.
 - **Modelos de papel para marketplaces** (`apps.flexi.templates`) e **"Montar equipe de marketplaces"** (`apps.flexi.create_team`):
   Gerente de Marketplaces (supervisor) -> SubGerente de Mercado Livre, SubGerente de Shopee, Gerente de Google Ads
   (supervisores) -> Agente de Mercado Livre: Criador de anuncios / Revisor de anuncios / Atendimento de perguntas;
@@ -47,9 +54,18 @@ Data: 2026-10-15. Plano aprovado em `docs/PHASE-FLEXI-PLAN.md`. Nenhuma alteraca
   no "Novo DOT", com o Flexi conectado os modelos passam a ser os papeis de marketplaces; na barra lateral, aviso ambar
   quando uma conexao precisa de atencao (evento `apps.changed`).
 
+- **Logar com Flexi (2026-10-16)**: primeira tela do onboarding e cartao Flexi. O runtime cria um pedido em
+  `POST /api/auth/app-externo/desafios` (rotas novas no flexi2, `backend/src/system/authExternalAppRoutes.ts`), a interface abre
+  `<flexi>/login-external-app?token=...` no navegador, onde o usuario ja esta logado, confere o codigo e autoriza; o runtime
+  acompanha `GET /api/auth/app-externo/desafios/:token` e recebe uma sessao propria (cookie `userdata`, so no Keychain). A
+  conexao e criada ou reaproveitada pelo e-mail, sem senha guardada; quando a sessao expira, basta logar de novo. A conexao
+  vira a conta do usuario (configuracao `account.flexi_connection_id`) e a foto de perfil dela (`/api/me/profile-photo`)
+  aparece na bolinha "EU".
+
 ## Metodos IPC novos
 
 `apps.list`, `apps.flexi.connect`, `apps.flexi.reconnect`, `apps.flexi.mfa`, `apps.flexi.check`, `apps.flexi.remove`,
+`apps.flexi.browser_start`, `apps.flexi.browser_poll`, `apps.flexi.browser_cancel`, `apps.flexi.photo`,
 `apps.flexi.templates`, `apps.flexi.create_team`, `apps.flexi.assign_role`, `teams.list|get|create|update|delete|set_manager|add_member|remove_member`, `dots.team`, `dots.integration`, `dots.set_integration`, `gateway.tools` (interno, com token
 de execucao).
 

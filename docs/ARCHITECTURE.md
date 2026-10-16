@@ -100,4 +100,15 @@ CLI do motor --MCP--> dotsd mcp-gateway --dots_browser_open--> BrowserPool (um C
                                                                   \-- CDP por --remote-debugging-pipe (fd 3/4, sem porta) --> Page.navigate + Accessibility.getFullAXTree
 ```
 
-Mesma politica, aprovacao e auditoria das demais ferramentas; exige `allow_network`. Ver `docs/BROWSER.md`.
+Mesma politica, aprovacao e auditoria das demais ferramentas; exige `allow_network`. Ao vivo: `browser.watch` liga o
+screencast CDP e os quadros saem como evento `browser.frame` para o painel "Computador do DOT". Ver `docs/BROWSER.md`.
+
+## Demissoes, uso das assinaturas e temas (2026-10-15)
+
+- Migracao `0009_dismissals.sql`: tabela `dismissals` (equipe, gerente, demitido, motivo, licao, memorias apagadas). O DOT
+  demitido mantem o id; `MemoriesRepo::delete_all_for_dot` e `ConversationsRepo::delete_for_dot` zeram memoria e conversa (a nova
+  nasce limpa). Ferramenta `dots_dismiss_employee` (risco Critical: aprovacao do usuario),
+  evento `dot.dismissed`, IPC `dismissals.list`. O executor injeta as demissoes da equipe nas instrucoes (`MAX_LESSON_CHARS`).
+- `usage.rs` (IPC `usage.get`) e `cli_updates.rs` (IPC `cli.updates`, `cli.update`, `cli.install`) no `dotsd`, com cache em
+  memoria; `reqwest` passou a dependencia normal do runtime. `Contact.pulse` alimenta o batimento da lista.
+- Tema: configuracao `ui.theme`; o app aplica as variaveis CSS no `:root` (`apps/desktop/src/lib/theme.ts`).
