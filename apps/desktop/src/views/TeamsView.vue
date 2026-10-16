@@ -63,7 +63,7 @@ const initial = (id: string) => name(id).charAt(0).toUpperCase();
 
       <p v-if="!teams.loading && !teams.items.length" class="text-sm text-zinc-500">Nenhuma equipe ainda. Crie uma acima ou escolha "Gerente" ao criar um DOT.</p>
 
-      <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-start gap-4">
+      <div class="flex flex-col gap-4">
         <section v-for="t in teams.items" :key="t.id" class="flex flex-col rounded-2xl border border-zinc-800 bg-zinc-900/60">
           <div class="space-y-4 p-5">
             <div class="flex items-start justify-between gap-3">
