@@ -82,6 +82,11 @@ input, textarea, select { -webkit-user-select: text; user-select: text; }
 .chat ::-webkit-scrollbar { width: 10px; height: 10px; }
 .chat ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
 
+.sidebar-scroll { scrollbar-color: var(--border) var(--sidebar); scrollbar-width: thin; }
+.sidebar-scroll::-webkit-scrollbar { width: 8px; }
+.sidebar-scroll::-webkit-scrollbar-track { background: var(--sidebar); }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid var(--sidebar); }
+
 .chat .md { user-select: text; line-height: 1.6; font-size: var(--agent-size); min-width: 0; overflow-wrap: anywhere; }
 .chat .md p { margin: 0 0 10px; }
 .chat .md p:last-child { margin-bottom: 0; }

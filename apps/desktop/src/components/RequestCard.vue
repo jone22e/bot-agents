@@ -41,7 +41,7 @@ function submit() {
     </template>
     <template v-else>
       <div class="ask-head">
-        <p class="ask-q">Posso {{ describeApproval(approval).replace(/^quer /, "") }}? <span class="risk">{{ RISK_LABEL[approval.risk] }}</span></p>
+        <p class="ask-q">Posso {{ describeApproval(approval).replace(/^quer /, "") }}? <span class="risk">{{ approval.tool === 'dots_browser_open' ? 'acesso à internet' : RISK_LABEL[approval.risk] }}</span></p>
         <button type="button" class="ghost small see" title="Ver o que exatamente ele quer fazer" @click="details = !details"><ClipboardList :size="12" /> {{ details ? "Ocultar detalhes" : "Ver detalhes" }}</button>
       </div>
       <pre v-if="details" class="ask-details">{{ [approval.resources.join("\n"), JSON.stringify(approval.input, null, 1)].filter(Boolean).join("\n") }}</pre>

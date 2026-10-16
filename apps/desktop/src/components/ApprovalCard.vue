@@ -13,7 +13,7 @@ const statusLabel: Record<string, string> = { pending: "aguardando", approved: "
   <div class="card">
     <div class="flex items-start justify-between gap-3">
       <p v-if="approval.kind === 'question'" class="text-sm text-zinc-100"><strong>{{ approval.dot_name }}</strong> pergunta: {{ approval.summary }}</p>
-      <p v-else class="text-sm text-zinc-100"><strong>{{ approval.dot_name }}</strong> {{ describeApproval(approval) }} <span class="text-zinc-500">· {{ RISK_LABEL[approval.risk] }}</span></p>
+      <p v-else class="text-sm text-zinc-100"><strong>{{ approval.dot_name }}</strong> {{ describeApproval(approval) }} <span class="text-zinc-500">· {{ approval.tool === 'dots_browser_open' ? 'acesso à internet' : RISK_LABEL[approval.risk] }}</span></p>
       <span class="badge" :class="approval.status === 'pending' ? 'bg-amber-500/20 text-amber-200' : approval.status === 'approved' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-zinc-700/50 text-zinc-300'">{{ statusLabel[approval.status] }}</span>
     </div>
     <p class="mt-1 text-xs text-zinc-500">{{ new Date(approval.requested_at).toLocaleString() }}<template v-if="approval.status === 'pending'"> · expira {{ new Date(approval.expires_at).toLocaleTimeString() }}</template><template v-if="approval.reason"> · {{ approval.reason }}</template></p>

@@ -88,7 +88,9 @@ function go(path: string) {
 
 <template>
   <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false">
-    <header class="flex h-12 shrink-0 items-center justify-end gap-2 border-b border-zinc-800/80 px-4" data-tauri-drag-region>
+    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" data-tauri-drag-region>
+      <span class="text-[11px] font-semibold tracking-[0.16em] text-zinc-400">DOTS</span>
+      <span class="flex-1" data-tauri-drag-region />
       <UsageChip opens="down" />
       <div class="relative">
         <button class="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100 hover:bg-zinc-700" :title="account ? `${account.user_name ?? account.email} · Menu` : 'Menu'" @click.stop="menu = !menu">
@@ -115,7 +117,7 @@ function go(path: string) {
         <button class="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-800 text-zinc-100 hover:bg-zinc-700" title="Novo DOT" @click="go('/dots/new')"><Plus :size="18" /></button>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-2">
+      <div class="sidebar-scroll flex-1 overflow-y-auto px-2">
         <button v-if="runtime.isConnected && apps.needsAttention.length" class="m-2 w-[calc(100%-1rem)] rounded-lg bg-amber-950/40 p-3 text-left text-xs text-amber-200 hover:bg-amber-950/60" @click="go('/engines')">{{ apps.needsAttention[0].label }}: {{ apps.needsAttention[0].status === 'mfa_pending' ? 'aguardando o codigo 2FA' : 'precisa entrar de novo' }}. <span class="underline">Resolver</span></button>
         <p v-if="!runtime.isConnected" class="m-2 rounded-lg bg-amber-950/40 p-3 text-xs text-amber-200">Servico parado. <button class="underline" @click="runtime.ensure()">Ligar</button></p>
         <p v-else-if="!contacts.loading && !contacts.items.length" class="m-2 rounded-lg bg-zinc-900 p-3 text-xs text-zinc-400">Nenhum DOT ainda. Toque em + para criar o primeiro.</p>

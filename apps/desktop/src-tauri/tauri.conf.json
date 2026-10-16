@@ -13,6 +13,9 @@
     "windows": [
       {
         "title": "DOTS",
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 16, "y": 16 },
+        "hiddenTitle": true,
         "width": 1200,
         "height": 800,
         "minWidth": 960,
