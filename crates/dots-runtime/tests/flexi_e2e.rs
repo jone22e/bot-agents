@@ -75,6 +75,38 @@ impl Rt {
 }
 
 #[tokio::test]
+async fn agent_account_is_separate_from_login_account() {
+    let personal = Flexi::start_at(false, 120).await;
+    let agent = Flexi::start_at(false, 125).await;
+    let rt = start().await;
+    let own: AppConnection = serde_json::from_value(rt.call("apps.flexi.connect", json!({ "base_url": personal.url, "email": "agente@teste.com", "senha": "segredo123" })).await).unwrap();
+    let worker: AppConnection = serde_json::from_value(rt.call("apps.flexi.connect", json!({ "base_url": agent.url, "email": "agente@teste.com", "senha": "segredo123" })).await).unwrap();
+    let dot = rt.dot("Revisor", "read").await;
+    rt.call("dots.set_integration", json!({ "dot_id": dot.id, "kind": "flexi", "connection_id": own.id })).await;
+    rt.call("settings.set", json!({ "key": "account.flexi_connection_id", "value": own.id })).await;
+
+    // A conexao pessoal, mesmo vinculada anteriormente ao DOT, nao libera suas ferramentas.
+    let tools = rt.run(&dot, "TOOLS").await;
+    assert!(!tools.result_text.as_deref().unwrap_or_default().contains("flexi_anuncios"));
+
+    rt.call("settings.set", json!({ "key": "agents.flexi_connection_id", "value": worker.id })).await;
+    reqwest::get(format!("{}/__especialidades", agent.url)).await.unwrap();
+    let templates: Vec<Value> = serde_json::from_value(rt.call("apps.flexi.templates", json!({})).await).unwrap();
+    assert!(templates.iter().any(|t| t["id"] == "gerente_de_compras"), "especialidades devem vir da conta do agente");
+    reqwest::get(format!("{}/__expire", personal.url)).await.unwrap();
+    // A sessao pessoal foi invalidada: uma consulta bem-sucedida prova que o DOT usou a conta do agente.
+    let result = rt.run(&dot, r#"FLEXI:flexi_anuncios:{"ids":[101]}"#).await;
+    assert_eq!(result.status, TaskStatus::Completed, "{:?}", result.error);
+    assert!(result.result_text.as_deref().unwrap_or_default().contains("Furadeira X"), "{:?}", result.result_text);
+
+    rt.call("apps.flexi.remove", json!({ "id": worker.id })).await;
+    assert!(rt.call("settings.get", json!({ "key": "agents.flexi_connection_id" })).await.is_null());
+    let tools = rt.run(&dot, "TOOLS").await;
+    assert!(!tools.result_text.as_deref().unwrap_or_default().contains("flexi_anuncios"));
+    rt.stop();
+}
+
+#[tokio::test]
 async fn connect_bind_and_use_flexi_tools_with_approval_and_session_renewal() {
     let flexi = Flexi::start(false).await;
     let rt = start().await;

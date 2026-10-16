@@ -107,6 +107,58 @@ fn engine_processes(data_dir: &std::path::Path) -> usize {
 }
 
 #[tokio::test]
+async fn new_dots_start_once_and_managers_get_an_editable_schedule() {
+    let rt = start().await;
+    let manager = rt.create_dot("Gerente novo", "read", "supervisor").await;
+    rt.call("dots.update", json!({ "id": manager.id, "patch": { "objective": "Acompanhar a equipe" } })).await;
+    rt.call("dots.start_autonomy", json!({ "id": manager.id })).await;
+    rt.wait_tasks(&manager.id, |ts| ts.iter().any(|t| t.origin == format!("autonomy:start:{}", manager.id)), Duration::from_secs(10)).await;
+    let schedules: Vec<Schedule> = serde_json::from_value(rt.call("schedules.list", json!({ "dot_id": manager.id })).await).unwrap();
+    assert_eq!(schedules.len(), 1);
+    assert_eq!(schedules[0].kind, ScheduleKind::Every);
+    assert_eq!(schedules[0].spec, "60");
+    assert!(schedules[0].enabled);
+    rt.call("dots.start_autonomy", json!({ "id": manager.id })).await;
+    assert_eq!(rt.tasks(&manager.id).await.iter().filter(|t| t.origin == format!("autonomy:start:{}", manager.id)).count(), 1);
+    assert_eq!(rt.call("schedules.list", json!({ "dot_id": manager.id })).await.as_array().unwrap().len(), 1);
+
+    let worker = rt.create_dot("Funcionário novo", "read", "worker").await;
+    rt.call("dots.update", json!({ "id": worker.id, "patch": { "objective": "Verificar tarefas da equipe" } })).await;
+    rt.call("dots.start_autonomy", json!({ "id": worker.id })).await;
+    let tasks = rt.wait_tasks(&worker.id, |ts| ts.iter().any(|t| t.origin == format!("autonomy:start:{}", worker.id)), Duration::from_secs(10)).await;
+    assert_eq!(tasks.iter().filter(|t| t.origin.starts_with("autonomy:start:")).count(), 1);
+    assert!(rt.call("schedules.list", json!({ "dot_id": worker.id })).await.as_array().unwrap().is_empty());
+
+    rt.call("schedules.delete", json!({ "id": schedules[0].id })).await;
+    rt.call("dots.start_autonomy", json!({ "id": manager.id })).await;
+    assert!(rt.call("schedules.list", json!({ "dot_id": manager.id })).await.as_array().unwrap().is_empty(), "agenda apagada pelo usuario nao volta");
+    rt.stop();
+}
+
+#[tokio::test]
+async fn runtime_restart_resumes_existing_idle_manager_without_user_message() {
+    let mut rt = start().await;
+    let manager = rt.create_dot("Gerente existente", "read", "supervisor").await;
+    rt.call("dots.update", json!({ "id": manager.id, "patch": { "objective": "Gerenciar trabalho recorrente" } })).await;
+    let old: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": manager.id, "prompt": "Trabalho anterior" })).await).unwrap();
+    rt.wait_task(&old.id, &[TaskStatus::Completed], Duration::from_secs(20)).await;
+    assert_eq!(rt.tasks(&manager.id).await.len(), 1);
+
+    unsafe { libc::kill(rt.child.id() as i32, libc::SIGTERM) };
+    rt.child.wait().unwrap();
+    rt.child = spawn_dotsd(rt.dir.path());
+    wait_pid(rt.dir.path(), rt.child.id()).await;
+    let (client, events) = connect(rt.dir.path(), "e2e3-restart").await;
+    rt.client = client;
+    rt.events = events;
+
+    let tasks = rt.wait_tasks(&manager.id, |ts| ts.iter().any(|t| t.origin == format!("autonomy:start:{}", manager.id)), Duration::from_secs(12)).await;
+    assert_eq!(tasks.iter().filter(|t| t.origin.starts_with("autonomy:start:")).count(), 1);
+    assert_eq!(rt.call("schedules.list", json!({ "dot_id": manager.id })).await.as_array().unwrap().len(), 1);
+    rt.stop();
+}
+
+#[tokio::test]
 async fn file_trigger_creates_one_task_per_change_and_idle_runtime_spawns_nothing() {
     let rt = start().await;
     let dot = rt.create_dot("Revisor", "read", "worker").await;
@@ -172,6 +224,32 @@ async fn supervisor_coordinates_three_dots_and_consolidates() {
     assert!(dl.iter().all(|d| d.status == DelegationStatus::Completed && d.result.as_deref() == Some("OK")));
     let reqs: Vec<EventRecord> = serde_json::from_value(rt.call("events.list", json!({ "event_type": "dot.task.requested" })).await).unwrap();
     assert_eq!(reqs.len(), 3);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn supervisor_reviews_first_delivery_while_other_employee_is_still_busy() {
+    let rt = start().await;
+    let sup = rt.create_dot("Gerente", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let fast = rt.create_dot("Rapido", "read", "worker").await;
+    let slow = rt.create_dot("Ocupado", "read", "worker").await;
+    rt.call("dots.update", json!({ "id": slow.id, "patch": { "limits": { "max_execution_seconds": 120, "max_concurrent_tasks": 1, "max_tokens_per_task": null, "max_cost_usd_per_task": null } } })).await;
+    let busy: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": slow.id, "prompt": "SLEEP:5" })).await).unwrap();
+    rt.wait_task(&busy.id, &[TaskStatus::Running], Duration::from_secs(10)).await;
+
+    let parent: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Rapido,Ocupado:Analise o pedido" })).await).unwrap();
+    rt.wait_task(&parent.id, &[TaskStatus::Completed], Duration::from_secs(15)).await;
+    rt.wait_task(&busy.id, &[TaskStatus::Running], Duration::from_secs(2)).await;
+    let updates = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin.starts_with("delegation_update:") && t.status == TaskStatus::Completed), Duration::from_secs(15)).await;
+    let update = updates.iter().find(|t| t.origin.starts_with("delegation_update:")).unwrap();
+    assert!(update.prompt.contains(&fast.name) && update.prompt.contains("Resultado: OK"), "{}", update.prompt);
+    assert!(!updates.iter().any(|t| t.origin == format!("followup:{}", parent.id)), "a consolidacao espera o ultimo funcionario");
+    let slow_tasks = rt.tasks(&slow.id).await;
+    assert!(slow_tasks.iter().any(|t| t.origin.starts_with("delegation:") && t.status == TaskStatus::Queued));
+
+    let final_tasks = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin == format!("followup:{}", parent.id) && t.status == TaskStatus::Completed), Duration::from_secs(20)).await;
+    assert_eq!(final_tasks.iter().filter(|t| t.origin.starts_with("delegation_update:")).count(), 1);
     rt.stop();
 }
 
