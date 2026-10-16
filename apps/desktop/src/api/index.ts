@@ -1,11 +1,20 @@
 import type {
-  AgySetupStatus, AppConnection, Approval, DotIntegration, DotTeamInfo, FlexiConnectInput, FlexiRoleTemplate, Team, TeamCreate, TeamUpdate, Contact, Checkpoint, Delegation, EventRecord, EventSubscription, RuntimeStats, Schedule, ScheduleCreate, ScheduleUpdate, SubscriptionCreate, SubscriptionUpdate, AuditLog, Conversation, Dot, DotCreate, DotUpdate, DotWorkspace, EngineConfiguration, EngineDetection,
-  EngineKind, Execution, ExecutionEventRecord, Installation, Memory, MemoryCreate, MemoryKind, MemoryUpdate, Message, Overview,
+  AgySetupStatus, AppConnection, Approval, CliUpdateInfo, CliUpdates, Dismissal, UsageInfo, DotIntegration, DotTeamInfo, FlexiConnectInput, FlexiRoleTemplate, Team, TeamCreate, TeamUpdate, Contact, Checkpoint, Delegation, EventRecord, EventSubscription, RuntimeStats, Schedule, ScheduleCreate, ScheduleUpdate, SubscriptionCreate, SubscriptionUpdate, AuditLog, Conversation, Dot, DotCreate, DotUpdate, DotWorkspace, EngineConfiguration, EngineDetection,
+  EngineKind, Execution, ExecutionEventRecord, GroupMessage, Installation, LearnedPermission, Memory, MemoryCreate, MemoryKind, MemoryUpdate, Message, Overview,
   RuntimeStatus, Setting, Task, TaskCreate, TaskStatus, ToolPolicy, ToolPolicyUpdate, WorkspaceChange,
 } from "@dots/shared-types";
 import { ipcCall } from "./ipc";
 
-export { ipcCall, runtimeApi, RuntimeError } from "./ipc";
+export { ipcCall, mediaApi, runtimeApi, RuntimeError } from "./ipc";
+
+/** Pedido de "Logar com Flexi" (IPC `apps.flexi.browser_start`): abrir `authorize_url` no navegador. */
+export interface FlexiBrowserLogin {
+  token: string;
+  code: string;
+  authorize_url: string;
+  expires_at: string | null;
+  poll_interval_ms: number;
+}
 
 /** Estado do navegador proprio de um DOT (IPC `browser.status`). */
 export interface BrowserStatus {
@@ -108,6 +117,14 @@ export const api = {
     delete: (id: string) => ipcCall<{ ok: boolean }>("conversations.delete", { id }),
     messages: (id: string, limit = 500) => ipcCall<Message[]>("conversations.messages", { id, limit }),
     send: (conversation_id: string, content: string, attachments: string[] = []) => ipcCall<{ message: Message; task: Task }>("conversations.send", { conversation_id, content, attachments }),
+    /** Guarda um anexo onde o DOT pode ler: arquivo do computador (`path`) ou bytes colados (`data`, base64). */
+    attach: (conversation_id: string, name: string, src: { path: string } | { data: string }) => ipcCall<{ path: string; name: string; size: number }>("conversations.attach", { conversation_id, name, ...src }),
+  },
+  /** Grupo geral: o usuario com todos os gerentes. */
+  group: {
+    members: () => ipcCall<Dot[]>("group.members"),
+    messages: (limit = 300) => ipcCall<GroupMessage[]>("group.messages", { limit }),
+    send: (content: string, mentions: string[] = []) => ipcCall<{ message: GroupMessage; tasks: Task[] }>("group.send", { content, mentions }),
   },
   approvals: {
     list: (pendingOnly = false, limit = 200) => ipcCall<Approval[]>("approvals.list", { pending_only: pendingOnly, limit }),
@@ -122,8 +139,22 @@ export const api = {
   policies: {
     get: (dot_id: string) => ipcCall<ToolPolicy>("policies.get", { dot_id }),
     set: (dot_id: string, patch: ToolPolicyUpdate) => ipcCall<ToolPolicy>("policies.set", { dot_id, patch }),
+    /** Tipos de acao aprovados uma vez, que o DOT nao pede de novo. */
+    learned: (dot_id: string) => ipcCall<LearnedPermission[]>("policies.learned", { dot_id }),
+    forget: (id: string) => ipcCall<{ ok: boolean }>("policies.forget", { id }),
   },
   audit: { list: (limit = 100) => ipcCall<AuditLog[]>("audit.list", { limit }) },
+  dismissals: {
+    /** Demissoes: por equipe, por DOT demitido, por gerente ou as mais recentes. */
+    list: (f: { team_id?: string; dot_id?: string; manager_dot_id?: string; limit?: number } = {}) => ipcCall<Dismissal[]>("dismissals.list", f),
+  },
+  /** Uso das assinaturas e versoes dos CLIs (como no ovrgit). */
+  usage: {
+    get: (force = false) => ipcCall<UsageInfo>("usage.get", { force }),
+    cliUpdates: (force = false) => ipcCall<CliUpdates>("cli.updates", { force }),
+    cliUpdate: (kind: EngineKind) => ipcCall<CliUpdateInfo | null>("cli.update", { kind }),
+    cliInstall: (kind: EngineKind) => ipcCall<CliUpdateInfo | null>("cli.install", { kind }),
+  },
   teams: {
     list: () => ipcCall<Team[]>("teams.list"),
     create: (input: TeamCreate) => ipcCall<Team>("teams.create", input),
@@ -141,10 +172,14 @@ export const api = {
     flexiMfa: (id: string, code: string) => ipcCall<AppConnection>("apps.flexi.mfa", { id, code }),
     flexiCheck: (id: string) => ipcCall<AppConnection>("apps.flexi.check", { id }),
     flexiRemove: (id: string) => ipcCall<{ ok: boolean }>("apps.flexi.remove", { id }),
+    flexiBrowserStart: (base_url?: string | null) => ipcCall<FlexiBrowserLogin>("apps.flexi.browser_start", { base_url: base_url ?? null }),
+    flexiBrowserPoll: (token: string) => ipcCall<{ status: string; connection?: AppConnection }>("apps.flexi.browser_poll", { token }),
+    flexiBrowserCancel: (token: string) => ipcCall<{ ok: boolean }>("apps.flexi.browser_cancel", { token }),
+    flexiPhoto: (id: string) => ipcCall<{ data_url: string | null }>("apps.flexi.photo", { id }),
     flexiTemplates: () => ipcCall<FlexiRoleTemplate[]>("apps.flexi.templates"),
     flexiCreateTeam: (id: string) => ipcCall<{ created: { template: string; dot_id: string }[] }>("apps.flexi.create_team", { id }),
     integration: (dot_id: string, kind = "flexi") => ipcCall<DotIntegration | null>("dots.integration", { dot_id, kind }),
-    assignRole: (dot_id: string, connection_id: string, opts: { template_id?: string | null; group: string; role: "worker" | "supervisor" }) =>
+    assignRole: (dot_id: string, connection_id: string, opts: { template_id?: string | null; group: string | null; role: "worker" | "supervisor" }) =>
       ipcCall<DotIntegration>("apps.flexi.assign_role", { dot_id, connection_id, template_id: opts.template_id ?? null, group: opts.group, role: opts.role }),
     setIntegration: (dot_id: string, connection_id: string | null, kind = "flexi") => ipcCall<DotIntegration | null>("dots.set_integration", { dot_id, kind, connection_id }),
   },

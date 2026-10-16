@@ -95,26 +95,34 @@ fn dotsd_version(path: &Path) -> DotsResult<String> {
         .ok_or_else(|| DotsError::Internal(format!("saida inesperada de dotsd --version: {s}")))
 }
 
-/// Versao e tamanho do sidecar embutido.
-pub fn bundled_runtime_fingerprint() -> Option<(String, u64)> {
+/// Versao do sidecar embutido e seu caminho.
+pub fn bundled_runtime_fingerprint() -> Option<(String, PathBuf)> {
     let src = bundled_dotsd()?;
     let version = dotsd_version(&src).ok()?;
-    let len = std::fs::metadata(&src).ok()?.len();
-    Some((version, len))
+    Some((version, src))
+}
+
+/// Dois binarios tem o mesmo conteudo? Compara os bytes (tamanho igual nao basta: builds da mesma versao
+/// costumam ter o mesmo tamanho com conteudo diferente, e o runtime antigo continuaria rodando).
+pub fn same_content(a: &Path, b: &Path) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) if ma.len() == mb.len() => matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y),
+        _ => false,
+    }
 }
 
 /// O runtime em execucao esta desatualizado em relacao ao sidecar deste app?
-/// (versao diferente, ou mesma versao com binario instalado de tamanho diferente).
+/// (versao diferente, ou mesma versao com binario instalado de conteudo diferente).
 pub fn runtime_is_stale(running_version: &str, data: &Path) -> bool {
-    let Some((version, len)) = bundled_runtime_fingerprint() else { return false };
+    let Some((version, src)) = bundled_runtime_fingerprint() else { return false };
     if version != running_version {
         return true;
     }
     let installed = data.join("bin").join(format!("dotsd-{version}"));
-    match std::fs::metadata(&installed) {
-        Ok(m) => m.len() != len,
-        Err(_) => !dev_mode(),
+    if !installed.exists() {
+        return !dev_mode();
     }
+    !same_content(&src, &installed)
 }
 
 /// Garante `<data>/bin/dotsd-<versao>` igual ao sidecar embutido. Retorna o caminho.
@@ -124,10 +132,7 @@ pub fn install_runtime_binary(data: &Path) -> DotsResult<PathBuf> {
     let bin_dir = data.join("bin");
     std::fs::create_dir_all(&bin_dir)?;
     let dest = bin_dir.join(format!("dotsd-{version}"));
-    let needs_copy = match (std::fs::metadata(&src), std::fs::metadata(&dest)) {
-        (Ok(a), Ok(b)) => a.len() != b.len(),
-        _ => true,
-    };
+    let needs_copy = !same_content(&src, &dest);
     if needs_copy {
         let tmp = bin_dir.join(format!(".dotsd-{version}.tmp"));
         std::fs::copy(&src, &tmp)?;
@@ -351,4 +356,21 @@ pub fn runtime_binary(data: &Path) -> DotsResult<PathBuf> {
         return bundled_dotsd().ok_or_else(|| DotsError::RuntimeUnavailable("dotsd nao encontrado ao lado do app (rode `cargo build -p dotsd`)".into()));
     }
     install_runtime_binary(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_content;
+
+    #[test]
+    fn same_content_compares_bytes_not_only_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (dir.path().join("a"), dir.path().join("b"), dir.path().join("c"));
+        std::fs::write(&a, b"dotsd-1").unwrap();
+        std::fs::write(&b, b"dotsd-2").unwrap();
+        std::fs::write(&c, b"dotsd-1").unwrap();
+        assert!(!same_content(&a, &b), "mesmo tamanho, conteudo diferente");
+        assert!(same_content(&a, &c));
+        assert!(!same_content(&a, &dir.path().join("nao-existe")));
+    }
 }
