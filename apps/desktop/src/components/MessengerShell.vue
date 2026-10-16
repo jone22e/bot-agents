@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, Blocks, Plus, Search, Settings, Users } from "lucide-vue-next";
 import Avatar from "@/components/Avatar.vue";
 import Heartbeat from "@/components/Heartbeat.vue";
@@ -84,15 +86,20 @@ function go(path: string) {
   menu.value = false;
   router.push(path);
 }
+function startWindowDrag(event: MouseEvent) {
+  if (event.button !== 0 || !isTauri()) return;
+  if ((event.target as Element).closest("button, a, input, select, textarea, .usage, [data-no-window-drag]")) return;
+  void getCurrentWindow().startDragging();
+}
 </script>
 
 <template>
   <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false">
-    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" data-tauri-drag-region>
+    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" @mousedown="startWindowDrag">
       <span class="text-[11px] font-semibold tracking-[0.16em] text-zinc-400">DOTS</span>
-      <span class="flex-1" data-tauri-drag-region />
+      <span class="flex-1" />
       <UsageChip opens="down" />
-      <div class="relative">
+      <div class="relative" data-no-window-drag>
         <button class="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100 hover:bg-zinc-700" :title="account ? `${account.user_name ?? account.email} · Menu` : 'Menu'" @click.stop="menu = !menu">
           <img v-if="apps.photo" :src="apps.photo" alt="" class="h-full w-full object-cover" />
           <template v-else>EU</template>
