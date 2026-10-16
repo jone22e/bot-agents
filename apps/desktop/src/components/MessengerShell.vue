@@ -87,7 +87,25 @@ function go(path: string) {
 </script>
 
 <template>
-  <div class="flex h-full overflow-hidden bg-zinc-950" @click="menu = false">
+  <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false">
+    <header class="flex h-12 shrink-0 items-center justify-end gap-2 border-b border-zinc-800/80 px-4" data-tauri-drag-region>
+      <UsageChip opens="down" />
+      <div class="relative">
+        <button class="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100 hover:bg-zinc-700" :title="account ? `${account.user_name ?? account.email} · Menu` : 'Menu'" @click.stop="menu = !menu">
+          <img v-if="apps.photo" :src="apps.photo" alt="" class="h-full w-full object-cover" />
+          <template v-else>EU</template>
+        </button>
+        <div v-if="menu" class="absolute right-0 top-[calc(100%+6px)] z-50 w-52 rounded-xl border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-2xl" @click.stop>
+          <button class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-zinc-800" @click="go('/activities')"><span class="flex items-center gap-2"><Activity :size="15" /> Atividades</span><span v-if="contacts.attention" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ contacts.attention }}</span></button>
+          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/teams')"><Users :size="15" /> Equipes</button>
+          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/settings')"><Settings :size="15" /> Configuracoes</button>
+          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/engines')"><Blocks :size="15" /> Conectar aplicativos</button>
+          <div class="my-1 border-t border-zinc-800"></div>
+          <p class="px-3 py-1.5 text-xs text-zinc-500">{{ runtime.isConnected ? "Servico ativo" : "Servico parado" }}</p>
+        </div>
+      </div>
+    </header>
+    <div class="flex min-h-0 flex-1 overflow-hidden">
     <aside class="flex shrink-0 flex-col border-r border-zinc-800/80" :style="{ width: `${sidebar.width.value}px`, backgroundColor: 'var(--sidebar)' }">
       <div class="flex items-center justify-end gap-2 px-3 pt-3 pb-2" data-tauri-drag-region>
         <div class="relative flex-1">
@@ -145,27 +163,12 @@ function go(path: string) {
         </template>
       </div>
 
-      <div class="relative flex items-center gap-2 border-t border-zinc-800/80 p-3">
-        <button class="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100 hover:bg-zinc-700" :title="account ? `${account.user_name ?? account.email} · Menu` : 'Menu'" @click.stop="menu = !menu">
-          <img v-if="apps.photo" :src="apps.photo" alt="" class="h-full w-full object-cover" />
-          <template v-else>EU</template>
-        </button>
-        <span class="flex-1" />
-        <UsageChip opens="up" />
-        <div v-if="menu" class="absolute bottom-14 left-3 z-20 w-52 rounded-xl border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-2xl" @click.stop>
-          <button class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-zinc-800" @click="go('/activities')"><span class="flex items-center gap-2"><Activity :size="15" /> Atividades</span><span v-if="contacts.attention" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ contacts.attention }}</span></button>
-          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/teams')"><Users :size="15" /> Equipes</button>
-          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/settings')"><Settings :size="15" /> Configuracoes</button>
-          <button class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800" @click="go('/engines')"><Blocks :size="15" /> Conectar aplicativos</button>
-          <div class="my-1 border-t border-zinc-800"></div>
-          <p class="px-3 py-1.5 text-xs text-zinc-500">{{ runtime.isConnected ? "Servico ativo" : "Servico parado" }}</p>
-        </div>
-      </div>
     </aside>
     <ResizeHandle grows="right" @resize="sidebar.resize" @reset="sidebar.reset" />
 
     <main class="flex min-w-0 flex-1 flex-col">
       <slot />
     </main>
+    </div>
   </div>
 </template>

@@ -25,6 +25,7 @@ struct SendParams {
 
 /// Origem das tarefas de quem recebeu a mensagem so para ciencia (nao comeca com `group:`, entao a resposta fica fora do grupo).
 const GROUP_CC_ORIGIN_PREFIX: &str = "group-cc:";
+const GROUP_CHAT_STYLE: &str = "Responda como numa conversa natural de grupo: va direto ao assunto, sem se apresentar de novo, sem saudacao automatica e sem formato de relatorio. Prefira 1 a 3 frases curtas. Se houver mais detalhes necessarios, separe as ideias em paragrafos curtos com uma linha em branco entre eles; cada paragrafo aparece como uma mensagem no grupo. Use listas ou titulos apenas se o usuario pedir. Nao omita fatos importantes nem invente resultados.";
 
 impl RuntimeService {
     /// Membros do grupo: quem gerencia uma equipe ou e supervisor (DOTs nao arquivados).
@@ -65,9 +66,9 @@ impl RuntimeService {
                     let addressed = mentioned.is_empty() || mentioned.iter().any(|d| d.id == m.id);
                     let origin = format!("{}{}", if addressed { GROUP_ORIGIN_PREFIX } else { GROUP_CC_ORIGIN_PREFIX }, msg.id);
                     let prompt = if mentioned.is_empty() {
-                        format!("Mensagem do usuario no grupo geral, que todos os gerentes recebem ({names}). Sua resposta aparece no grupo para o usuario e os outros gerentes.\n\n{content}")
+                        format!("Mensagem do usuario no grupo geral, que todos os gerentes recebem ({names}). Sua resposta aparece no grupo para o usuario e os outros gerentes.\n\n{GROUP_CHAT_STYLE}\n\n{content}")
                     } else if addressed {
-                        format!("Mensagem do usuario no grupo geral, que todos os gerentes recebem ({names}). O usuario marcou {mentioned_names}: a mensagem e dirigida a voce, responda e cuide do pedido. Sua resposta aparece no grupo para o usuario e os outros gerentes.\n\n{content}")
+                        format!("Mensagem do usuario no grupo geral, que todos os gerentes recebem ({names}). O usuario marcou {mentioned_names}: a mensagem e dirigida a voce, responda e cuide do pedido. Sua resposta aparece no grupo para o usuario e os outros gerentes.\n\n{GROUP_CHAT_STYLE}\n\n{content}")
                     } else {
                         format!("Mensagem do usuario no grupo geral ({names}), dirigida a {mentioned_names}, nao a voce. Apenas tome conhecimento: nao execute acoes, nao delegue e nao responda ao pedido. Responda somente \"Ciente.\" (esta resposta nao aparece no grupo).\n\n{content}")
                     };

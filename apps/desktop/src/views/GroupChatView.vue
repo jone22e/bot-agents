@@ -20,7 +20,33 @@ const draft = ref("");
 const thread = ref<HTMLElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
 
-type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage };
+const MAX_BUBBLE = 420;
+
+/** Respostas extensas viram uma sequencia de bolhas, sem alterar o texto gravado pelo DOT. */
+function splitReply(content: string): string[] {
+  const text = content.trim();
+  if (text.length <= MAX_BUBBLE) return [text];
+  const blocks = text.split(/\n\s*\n/).flatMap((paragraph) => {
+    if (paragraph.length <= MAX_BUBBLE || paragraph.includes("```")) return [paragraph];
+    const parts: string[] = [];
+    for (const line of paragraph.split("\n")) {
+      if (/^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line) && parts.length) parts.push(line);
+      else if (parts.length) parts[parts.length - 1] += `\n${line}`;
+      else parts.push(line);
+    }
+    return parts;
+  });
+  const chunks: string[] = [];
+  for (const block of blocks) {
+    if (!block.trim()) continue;
+    const last = chunks.length - 1;
+    if (last >= 0 && chunks[last]!.length + block.length + 2 <= MAX_BUBBLE) chunks[last] += `\n\n${block}`;
+    else chunks.push(block);
+  }
+  return chunks;
+}
+
+type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage; text: string; first: boolean; last: boolean };
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
   let last = "";
@@ -33,7 +59,8 @@ const rows = computed<Row[]>(() => {
       const label = day === new Date().toDateString() ? "Hoje" : day === new Date(Date.now() - 86400000).toDateString() ? "Ontem" : d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
       out.push({ kind: "date", key: `d-${day}`, label });
     }
-    out.push({ kind: "msg", key: g.id, g });
+    const parts = g.role === "dot" ? splitReply(g.content) : [g.content];
+    parts.forEach((text, index) => out.push({ kind: "msg", key: `${g.id}-${index}`, g, text, first: index === 0, last: index === parts.length - 1 }));
   }
   return out;
 });
@@ -161,15 +188,16 @@ function autosize() {
       </div>
       <template v-for="r in rows" :key="r.key">
         <p v-if="r.kind === 'date'" class="day">{{ r.label }}</p>
-        <div v-else class="message-row" :class="r.g.role === 'user' ? 'mine' : 'theirs'">
-          <Avatar v-if="r.g.role === 'dot'" :name="r.g.dot_name ?? '?'" size="sm" />
+        <div v-else class="message-row" :class="[r.g.role === 'user' ? 'mine' : 'theirs', { continuation: !r.first }]">
+          <Avatar v-if="r.g.role === 'dot' && r.first" :name="r.g.dot_name ?? '?'" size="sm" />
+          <span v-else-if="r.g.role === 'dot'" class="avatar-space" />
           <div class="message-body">
-            <button v-if="r.g.role === 'dot'" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
+            <button v-if="r.g.role === 'dot' && r.first" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
             <div class="message-bubble">
-              <div v-if="r.g.role === 'dot'" class="md" @click="onMdClick($event, openUrl)" v-html="md(r.g.content)" />
-              <p v-else>{{ r.g.content }}</p>
+              <div v-if="r.g.role === 'dot'" class="md" @click="onMdClick($event, openUrl)" v-html="md(r.text)" />
+              <p v-else>{{ r.text }}</p>
             </div>
-            <small>{{ timeOf(r.g) }}</small>
+            <small v-if="r.last">{{ timeOf(r.g) }}</small>
           </div>
         </div>
       </template>
@@ -220,6 +248,8 @@ function autosize() {
 .day { margin: 8px 0; text-align: center; font-size: 11px; color: var(--faint); }
 .message-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
 .message-row.mine { justify-content: flex-end; }
+.message-row.continuation { margin-top: -7px; }
+.avatar-space { width: 28px; flex: none; }
 .message-body { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: min(78%, 720px); min-width: 0; }
 .mine .message-body { align-items: flex-end; }
 .sender { padding: 0 4px; background: transparent; border: 0; color: var(--text); font-size: 12px; font-weight: 600; }
