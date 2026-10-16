@@ -3,6 +3,8 @@ import { createPinia, setActivePinia } from "pinia";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+const openUrl = vi.fn();
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...a: unknown[]) => openUrl(...a) }));
 
 import { useAppsStore } from "./apps";
 
@@ -36,5 +38,50 @@ describe("apps store (conexoes com o Flexi)", () => {
     expect(await s.mfa("c1", "000")).toBeNull();
     expect(s.error).toContain("codigo invalido");
     expect(s.busy).toBe(false);
+  });
+  it("loginWithBrowser opens the Flexi, polls until authorized and saves the account", async () => {
+    vi.useFakeTimers();
+    const calls: { method?: string; params?: unknown }[] = [];
+    const opened: unknown[] = [];
+    openUrl.mockImplementation(async (url: string) => { opened.push(url); });
+    let polls = 0;
+    invoke.mockImplementation(async (_c: string, a: { method?: string; params?: unknown }) => {
+      calls.push(a);
+      if (a.method === "apps.flexi.browser_start") return { token: "tok-1", code: "ABC-123", authorize_url: "https://flexi.test/login-external-app?token=tok-1", expires_at: null, poll_interval_ms: 1000 };
+      if (a.method === "apps.flexi.browser_poll") return ++polls < 2 ? { status: "pending" } : { status: "authenticated", connection: { id: "c9", kind: "flexi", status: "connected" } };
+      if (a.method === "apps.list") return [{ id: "c9", kind: "flexi", status: "connected" }];
+      if (a.method === "settings.set") return { key: "account.flexi_connection_id", value: "c9" };
+      if (a.method === "apps.flexi.photo") return { data_url: "data:image/png;base64,AAAA" };
+      return null;
+    });
+    const s = useAppsStore();
+    const pending = s.loginWithBrowser();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.browserLogin?.code).toBe("ABC-123");
+    expect(opened).toEqual(["https://flexi.test/login-external-app?token=tok-1"]);
+    await vi.advanceTimersByTimeAsync(2500);
+    const c = await pending;
+    vi.useRealTimers();
+    expect(c?.id).toBe("c9");
+    expect(s.browserLogin).toBeNull();
+    expect(calls.find((x) => x.method === "settings.set")?.params).toMatchObject({ key: "account.flexi_connection_id", value: "c9" });
+    await Promise.resolve();
+    expect(s.photo).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("loginWithBrowser stops with a message when the user denies in the browser", async () => {
+    vi.useFakeTimers();
+    invoke.mockImplementation(async (_c: string, a: { method?: string }) => {
+      if (a.method === "apps.flexi.browser_start") return { token: "tok-2", code: "XYZ-999", authorize_url: "https://flexi.test/x", expires_at: null, poll_interval_ms: 1000 };
+      if (a.method === "apps.flexi.browser_poll") return { status: "denied" };
+      return null;
+    });
+    const s = useAppsStore();
+    const pending = s.loginWithBrowser();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await pending).toBeNull();
+    vi.useRealTimers();
+    expect(s.error).toContain("recusado");
+    expect(s.browserLogin).toBeNull();
   });
 });

@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import flexiIcon from "@/assets/flexi-icon.svg";
+import ErrorBanner from "@/components/ErrorBanner.vue";
+import FlexiBrowserLogin from "@/components/FlexiBrowserLogin.vue";
 import { ENGINE_LABEL } from "@/lib/humanize";
+import { useAppsStore } from "@/stores/apps";
 import { useEnginesStore } from "@/stores/engines";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useSettingsStore } from "@/stores/settings";
@@ -10,6 +14,9 @@ const router = useRouter();
 const runtime = useRuntimeStore();
 const engines = useEnginesStore();
 const settings = useSettingsStore();
+const apps = useAppsStore();
+/** Primeira tela: "Logar com Flexi" (pode pular). Depois seguem os passos de sempre. */
+const flexiDone = ref(false);
 const step = ref(0);
 const finishing = ref(false);
 
@@ -30,7 +37,19 @@ async function finish(createDot: boolean) {
 </script>
 
 <template>
-  <div class="flex h-full items-center justify-center bg-zinc-950 p-8">
+  <div v-if="!flexiDone" class="flex h-full items-center justify-center bg-zinc-950 p-8">
+    <div class="card w-full max-w-sm text-center">
+      <img :src="flexiIcon" alt="" class="mx-auto h-14 w-14" />
+      <h1 class="mt-4 text-lg font-semibold">Entre com a sua conta do Flexi</h1>
+      <p class="mt-2 text-sm text-zinc-400">O Flexi abre no navegador, onde voce ja esta logado. Confirme o acesso la e volte para ca.</p>
+      <div class="mt-5 text-left">
+        <FlexiBrowserLogin large @done="flexiDone = true" />
+        <ErrorBanner :message="apps.error" />
+      </div>
+      <button v-if="!apps.browserLogin" class="btn-ghost mt-3 text-xs" @click="flexiDone = true">Continuar sem o Flexi</button>
+    </div>
+  </div>
+  <div v-else class="flex h-full items-center justify-center bg-zinc-950 p-8">
     <div class="w-full max-w-xl">
       <ol class="mb-6 flex gap-2 text-xs">
         <li v-for="(s, i) in steps" :key="s" class="flex items-center gap-2" :class="i === step ? 'text-indigo-300' : 'text-zinc-500'">
