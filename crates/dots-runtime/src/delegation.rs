@@ -74,7 +74,7 @@ impl RuntimeService {
         let _ = self.emit_event(et::DOT_TASK_REQUESTED, &format!("dot:{}", ctx.dot_id), json!({ "delegation_id": d.id, "from_dot_id": ctx.dot_id, "to_dot_id": target.id, "task_id": child.id, "correlation_id": correlation }), Some(correlation), None, 0).await;
         self.events.emit("delegation.changed", json!({ "id": d.id, "status": "pending" }));
         Ok(ToolOutput::ok(format!(
-            "Delegacao {} criada para '{}'. Ela roda em segundo plano; termine seu turno resumindo o que esta aguardando. Quando concluir, voce recebera uma nova tarefa com o resultado.",
+            "Delegacao {} criada para '{}'. Ela roda em segundo plano; termine seu turno resumindo o que esta aguardando. Cada entrega da equipe gera uma tarefa de acompanhamento para voce, sem pedido do usuario.",
             d.id, target.name
         )))
     }
@@ -298,7 +298,7 @@ impl RuntimeService {
             .unwrap_or(false)
     }
 
-    /// Chamado quando uma tarefa termina: fecha a delegacao e, se todas as irmas terminaram, cria a continuacao do pai.
+    /// Chamado quando uma tarefa termina: avisa o gerente a cada entrega e consolida quando todas terminam.
     pub async fn on_task_finished(&self, task: &Task, status: TaskStatus, result: &str, error: Option<&str>) {
         let child_id = task.id.clone();
         let Ok(Some(d)) = self.storage.call(move |st| st.delegations().by_child(&child_id)).await else { return };
@@ -317,16 +317,49 @@ impl RuntimeService {
         self.events.emit("delegation.changed", json!({ "id": d.id, "status": dstatus.as_str() }));
         let _ = self.emit_event(et::DELEGATION_COMPLETED, &format!("dot:{}", task.dot_id), json!({ "delegation_id": d.id, "parent_task_id": d.parent_task_id, "status": dstatus.as_str() }), Some(d.correlation_id.clone()), Some(format!("delegation-done:{}", d.id)), 0).await;
 
-        // Continuacao do solicitante quando todas as delegacoes da tarefa pai terminaram.
+        // Acompanha entregas parciais sem esperar o ultimo funcionario terminar.
         let parent_id = d.parent_task_id.clone();
         let (parent, siblings) = match self.storage.call(move |st| Ok((st.tasks().get(&parent_id)?, st.delegations().for_parent(&parent_id)?))).await {
             Ok(x) => x,
             Err(_) => return,
         };
-        if parent.status == TaskStatus::Cancelled || siblings.iter().any(|s| !s.status.is_terminal()) {
+        if parent.status == TaskStatus::Cancelled {
             return;
         }
-        let already = self.storage.call({ let pid = parent.id.clone(); move |st| Ok(st.tasks().list(&dots_storage::repos::TaskFilter { limit: 50, ..Default::default() })?.into_iter().any(|t| t.origin == format!("followup:{pid}"))) }).await.unwrap_or(false);
+        if siblings.iter().any(|s| !s.status.is_terminal()) {
+            let attempt = self.storage.call({ let id = task.id.clone(); move |st| Ok(st.tasks().get(&id)?.attempts) }).await.unwrap_or(0);
+            let origin = format!("delegation_update:{}:{attempt}", d.id);
+            let already = self.storage.call({ let origin = origin.clone(); move |st| st.tasks().exists_origin(&origin) }).await.unwrap_or(false);
+            if !already {
+                let mut prompt = format!(
+                    "Acompanhe agora a entrega de {} (delegacao {}, status {}).\nPedido: {}\nResultado: {}\n\nEstado das delegacoes deste trabalho:\n",
+                    d.to_dot_name, d.id, dstatus.as_str(), d.request, summary
+                );
+                for s in &siblings {
+                    prompt.push_str(&format!("- {}: {} (delegacao {})\n", s.to_dot_name, s.status.as_str(), s.id));
+                }
+                prompt.push_str("\nAvalie esta entrega sem esperar o usuario pedir. Se houver falha ou bloqueio, use dots_delegation_status com o id da delegacao e tome a providencia cabivel (retomar ou delegar novamente). Acompanhe as demais entregas; elas tambem gerarao tarefas automaticamente. A consolidacao final chegara quando todas terminarem.");
+                let input = TaskCreate {
+                    dot_id: parent.dot_id.clone(),
+                    prompt,
+                    title: Some(format!("Acompanhar entrega de {}", d.to_dot_name)),
+                    kind: Some(parent.kind),
+                    conversation_id: parent.conversation_id.clone(),
+                    origin: Some(origin),
+                    correlation_id: parent.correlation_id.clone().or(Some(parent.id.clone())),
+                    delegation_chain: parent.delegation_chain.clone(),
+                    parent_task_id: parent.parent_task_id.clone(),
+                    ..Default::default()
+                };
+                match self.create_task(input).await {
+                    Ok(t) => tracing::info!(parent = %parent.id, followup = %t.id, "acompanhamento criado apos entrega parcial"),
+                    Err(e) => tracing::warn!(parent = %parent.id, error = %e, "falha ao criar acompanhamento parcial"),
+                }
+            }
+            return;
+        }
+        // Consolidacao final quando todas as delegacoes da tarefa pai terminaram.
+        let already = self.storage.call({ let origin = format!("followup:{}", parent.id); move |st| st.tasks().exists_origin(&origin) }).await.unwrap_or(false);
         if already {
             return;
         }
