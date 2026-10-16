@@ -67,6 +67,21 @@ async function pickDir() {
       <div class="flex justify-end"><button class="btn-primary" :disabled="store.saving" @click="save">{{ store.saving ? "Salvando..." : "Salvar" }}</button></div>
     </section>
 
+    <section class="card space-y-2">
+      <h3 class="text-sm font-semibold text-zinc-200">Permissoes aprendidas</h3>
+      <p class="text-xs text-zinc-500">Quando voce (ou o gerente) permite uma acao, ele aprende e nao pede de novo para o mesmo tipo de acao. Esqueca para ele voltar a pedir.</p>
+      <ul v-if="store.learned.length" class="divide-y divide-zinc-800 text-sm">
+        <li v-for="l in store.learned" :key="l.id" class="flex items-center justify-between gap-3 py-2">
+          <div class="min-w-0">
+            <span class="block truncate text-zinc-200">{{ l.summary || l.action_key }}</span>
+            <span class="text-[11px] text-zinc-500">desde {{ new Date(l.created_at).toLocaleDateString() }}</span>
+          </div>
+          <button class="shrink-0 text-xs text-red-300 hover:underline" @click="store.forget(l.id)">esquecer</button>
+        </li>
+      </ul>
+      <p v-else class="text-xs text-zinc-500">Nenhuma ainda.</p>
+    </section>
+
     <section class="card">
       <div class="flex items-center justify-between">
         <div>

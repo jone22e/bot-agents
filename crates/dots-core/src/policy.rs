@@ -173,3 +173,18 @@ pub struct WorkspaceChange {
     pub summary: String,
     pub created_at: Timestamp,
 }
+
+/// Permissao aprendida: um tipo de acao que o DOT pediu e foi aprovado uma vez (pelo usuario ou pelo gerente).
+/// Acoes do mesmo tipo deste DOT nao pedem aprovacao de novo, ate o usuario esquecer a permissao.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LearnedPermission {
+    pub id: String,
+    pub dot_id: String,
+    /// Tipo da acao (ex.: `dots_browser_click|flexi.exemplo.com|publicar`, `flexi_publicar_anuncio`).
+    pub action_key: String,
+    /// Descricao para o usuario (ex.: clicar em "Publicar" em flexi.exemplo.com).
+    pub summary: String,
+    pub approval_id: Option<String>,
+    pub created_at: crate::Timestamp,
+}

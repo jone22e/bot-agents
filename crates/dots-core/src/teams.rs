@@ -46,3 +46,23 @@ pub struct DotTeamInfo {
     pub member_of: Option<Team>,
     pub manages: Option<Team>,
 }
+
+/// Demissao de um funcionario pelo gerente. O DOT continua existindo (mesmo id) com a memoria zerada;
+/// motivo e licao ficam registrados para que a equipe nao repita o erro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Dismissal {
+    pub id: String,
+    pub team_id: Option<String>,
+    pub team_name: String,
+    pub manager_dot_id: Option<String>,
+    pub manager_name: String,
+    pub dot_id: Option<String>,
+    pub dot_name: String,
+    pub reason: String,
+    /// O que o proximo funcionario deve fazer diferente (derivado do motivo quando o gerente nao informa).
+    pub lesson: String,
+    /// Quantas memorias foram apagadas na demissao.
+    pub memories_wiped: u32,
+    pub created_at: Timestamp,
+}

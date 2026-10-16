@@ -44,6 +44,7 @@ pub mod event_types {
     pub const FILE_CHANGED: &str = "file.changed";
     pub const GIT_COMMIT: &str = "git.commit.created";
     pub const SCHEDULE_DUE: &str = "schedule.due";
+    pub const DOT_DISMISSED: &str = "dot.dismissed";
     /// Tipos que o usuario pode usar em gatilhos.
     pub const SUBSCRIBABLE: &[&str] = &[FILE_CHANGED, GIT_COMMIT, TASK_COMPLETED, TASK_FAILED, APPROVAL_GRANTED, APPROVAL_REJECTED];
 }
