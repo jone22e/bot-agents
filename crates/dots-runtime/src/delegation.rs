@@ -300,6 +300,8 @@ impl RuntimeService {
 
     /// Chamado quando uma tarefa termina: avisa o gerente a cada entrega e consolida quando todas terminam.
     pub async fn on_task_finished(&self, task: &Task, status: TaskStatus, result: &str, error: Option<&str>) {
+        // Serializa a verificacao da origem e a criacao da continuacao quando entregas terminam juntas.
+        let _finish_guard = self.delegation_finish_lock.lock().await;
         let child_id = task.id.clone();
         let Ok(Some(d)) = self.storage.call(move |st| st.delegations().by_child(&child_id)).await else { return };
         // Terminou perguntando: a delegacao segue aberta ate a resposta e a continuacao (que vira a nova filha).

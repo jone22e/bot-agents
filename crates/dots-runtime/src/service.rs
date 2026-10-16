@@ -36,6 +36,7 @@ pub struct RuntimeService {
     pub dotsd_path: PathBuf,
     pub schedules_notify: tokio::sync::Notify,
     pub autonomy_lock: tokio::sync::Mutex<()>,
+    pub delegation_finish_lock: tokio::sync::Mutex<()>,
     pub watcher: Arc<std::sync::Mutex<crate::watcher::Watcher>>,
     /// Profundidade de encadeamento de eventos por tarefa (em memoria).
     pub event_depths: std::sync::Mutex<std::collections::HashMap<String, u32>>,

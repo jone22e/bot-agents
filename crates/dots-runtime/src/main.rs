@@ -251,6 +251,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         dotsd_path,
         schedules_notify: tokio::sync::Notify::new(),
         autonomy_lock: tokio::sync::Mutex::new(()),
+        delegation_finish_lock: tokio::sync::Mutex::new(()),
         watcher: watcher.clone(),
         event_depths: std::sync::Mutex::new(std::collections::HashMap::new()),
         usage: crate::usage::UsageCache::default(),
