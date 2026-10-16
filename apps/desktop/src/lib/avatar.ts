@@ -1,7 +1,7 @@
-// Imagem de perfil de cada DOT: personagem de desenho gerado no proprio app (DiceBear, estilo Notionists, CC0:
-// uso livre inclusive comercial, sem credito obrigatorio). A semente e o id do DOT: cada um ganha o seu boneco ao ser criado e ele nunca muda.
+// Imagem de perfil de cada DOT: rosto de robo gerado no proprio app (DiceBear, estilo Bottts Neutral, de Pablo
+// Stanley: uso livre inclusive comercial, sem credito obrigatorio). A semente e o id do DOT: cada um ganha o seu boneco ao ser criado e ele nunca muda.
 import { createAvatar } from "@dicebear/core";
-import { notionists } from "@dicebear/collection";
+import { botttsNeutral } from "@dicebear/collection";
 
 const BACKGROUNDS = ["b6e3f4", "c0aede", "d1d4f9", "ffd5dc", "ffdfbf", "c7f0d8"];
 const cache = new Map<string, string>();
@@ -10,7 +10,7 @@ const cache = new Map<string, string>();
 export function avatarUri(seed: string): string {
   let uri = cache.get(seed);
   if (!uri) {
-    uri = createAvatar(notionists, { seed, backgroundColor: BACKGROUNDS, backgroundType: ["solid"] }).toDataUri();
+    uri = createAvatar(botttsNeutral, { seed, backgroundColor: BACKGROUNDS, backgroundType: ["solid"] }).toDataUri();
     cache.set(seed, uri);
   }
   return uri;
