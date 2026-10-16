@@ -7,7 +7,7 @@ use dots_flexi::FlexiError;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::flexi::{KIND, PRICE_RULES_SUMMARY};
+use crate::flexi::{ACCOUNT_CONNECTION_SETTING, AGENTS_CONNECTION_SETTING, KIND, PRICE_RULES_SUMMARY};
 use crate::service::RuntimeService;
 
 /// Rota do Flexi com as especialidades do aplicativo Agentes DOTS (cadastradas em Configuracoes > Aplicativos).
@@ -80,7 +80,7 @@ pub fn builtin_templates() -> Vec<FlexiRoleTemplate> {
 }
 
 impl RuntimeService {
-    /// Especialidades do aplicativo Agentes DOTS no Flexi. Usa a conexao informada ou a primeira conectada. Se o Flexi
+    /// Especialidades do aplicativo Agentes DOTS no Flexi. Usa a conexao informada ou a conta escolhida para os agentes. Se o Flexi
     /// nao responder (ou for uma versao sem a rota), usa a ultima lista lida e, sem ela, os papeis embutidos.
     pub async fn flexi_templates(&self, connection_id: Option<&str>) -> Vec<FlexiRoleTemplate> {
         match self.flexi_fetch_templates(connection_id).await {
@@ -101,7 +101,15 @@ impl RuntimeService {
             .storage
             .call(move |s| match id {
                 Some(id) => s.apps().get(&id).map(Some),
-                None => Ok(s.apps().list(Some(KIND))?.into_iter().find(|c| c.status == ConnectionStatus::Connected)),
+                None => {
+                    if let Some(setting) = s.settings().get(AGENTS_CONNECTION_SETTING)? {
+                        return Ok(s.apps().list(Some(KIND))?.into_iter().find(|c| Some(c.id.as_str()) == setting.value.as_str()));
+                    }
+                    if s.settings().get(ACCOUNT_CONNECTION_SETTING)?.is_some() {
+                        return Ok(None);
+                    }
+                    Ok(s.apps().list(Some(KIND))?.into_iter().find(|c| c.status == ConnectionStatus::Connected))
+                }
             })
             .await?
             .ok_or_else(|| DotsError::Validation("nenhuma conexao Flexi".into()))?;

@@ -6,6 +6,8 @@ import { useSettingsStore } from "@/stores/settings";
 
 /** Conexao Flexi da conta do proprio usuario (vinculada pelo "Logar com Flexi"); a foto dela vai na bolinha "EU". */
 export const ACCOUNT_CONNECTION = "account.flexi_connection_id";
+/** Conta do Flexi usada pelos DOTs, separada da conta que entra no aplicativo. */
+export const AGENTS_CONNECTION = "agents.flexi_connection_id";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const CLOSED_MESSAGE: Record<string, string> = {
@@ -16,6 +18,7 @@ const CLOSED_MESSAGE: Record<string, string> = {
 export const useAppsStore = defineStore("apps", {
   state: () => ({
     connections: [] as AppConnection[], templates: [] as FlexiRoleTemplate[], busy: false, error: null as string | null,
+    loaded: false,
     /** "Logar com Flexi" aguardando a autorizacao no navegador. */
     browserLogin: null as FlexiBrowserLogin | null,
     /** Foto de perfil (data URL) da conta do usuario. */
@@ -30,6 +33,7 @@ export const useAppsStore = defineStore("apps", {
     async load() {
       try { this.connections = await api.apps.list(); this.error = null; }
       catch (e) { this.error = e instanceof RuntimeError ? e.message : String(e); }
+      finally { this.loaded = true; }
     },
     async loadTemplates() {
       try { this.templates = await api.apps.flexiTemplates(); } catch { this.templates = []; }
@@ -45,7 +49,12 @@ export const useAppsStore = defineStore("apps", {
     reconnect(id: string, senha?: string, remember?: boolean) { return this.wrap(() => api.apps.flexiReconnect(id, senha, remember)); },
     mfa(id: string, code: string) { return this.wrap(() => api.apps.flexiMfa(id, code)); },
     check(id: string) { return this.wrap(() => api.apps.flexiCheck(id)); },
-    remove(id: string) { return this.wrap(() => api.apps.flexiRemove(id)); },
+    async remove(id: string) {
+      const result = await this.wrap(() => api.apps.flexiRemove(id));
+      const settings = useSettingsStore();
+      if (result && settings.items[AGENTS_CONNECTION] === id) settings.items[AGENTS_CONNECTION] = null;
+      return result;
+    },
     createTeam(id: string) { return this.wrap(() => api.apps.flexiCreateTeam(id)); },
     /**
      * "Logar com Flexi": abre o Flexi no navegador (onde o usuario ja esta logado) e espera a autorizacao.

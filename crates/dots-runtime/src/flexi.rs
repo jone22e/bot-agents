@@ -14,6 +14,8 @@ use crate::tools::ToolOutput;
 
 pub const KIND: &str = "flexi";
 pub const DEFAULT_BASE_URL: &str = "https://flexi.c2s-business.com";
+pub(crate) const ACCOUNT_CONNECTION_SETTING: &str = "account.flexi_connection_id";
+pub(crate) const AGENTS_CONNECTION_SETTING: &str = "agents.flexi_connection_id";
 const MAX_RESULT_CHARS: usize = 60_000;
 
 /// Clientes vivos por conexao + desafios 2FA pendentes + logins pelo navegador em andamento (por token).
@@ -281,13 +283,19 @@ impl RuntimeService {
         self.flexi.secrets.delete(&FlexiRegistry::cookie_key(id));
         self.flexi.secrets.delete(&FlexiRegistry::password_key(id));
         let i = id.to_string();
-        self.storage.call(move |s| s.apps().delete(&i)).await?;
+        self.storage.call(move |s| {
+            s.apps().delete(&i)?;
+            if s.settings().get(AGENTS_CONNECTION_SETTING)?.and_then(|setting| setting.value.as_str().map(String::from)).as_deref() == Some(i.as_str()) {
+                s.settings().delete(AGENTS_CONNECTION_SETTING)?;
+            }
+            Ok(())
+        }).await?;
         self.audit("app.flexi.remove", "app_connection", Some(id), json!({})).await?;
         self.events.emit("apps.changed", json!({ "id": id, "deleted": true }));
         Ok(())
     }
 
-    /// Conexao Flexi usada por um DOT (vinculo explicito ou a unica existente).
+    /// Conexao Flexi usada por um DOT. A conta escolhida para os agentes prevalece sobre vinculos antigos.
     /// Se `url` e do Flexi deste DOT, coloca o cookie de sessao no navegador dele: a pagina abre logada.
     pub async fn browser_login_for_app(&self, dot_id: &str, browser: &crate::browser::Browser, url: &str) -> DotsResult<bool> {
         let Some(conn) = self.flexi_connection_for_dot(dot_id).await? else { return Ok(false) };
@@ -305,6 +313,14 @@ impl RuntimeService {
         let d = dot_id.to_string();
         self.storage
             .call(move |s| {
+                if let Some(setting) = s.settings().get(AGENTS_CONNECTION_SETTING)? {
+                    let id = setting.value.as_str();
+                    return Ok(s.apps().list(Some(KIND))?.into_iter().find(|c| Some(c.id.as_str()) == id));
+                }
+                // Depois que ha uma conta pessoal, a escolha da conta dos agentes e obrigatoria.
+                if s.settings().get(ACCOUNT_CONNECTION_SETTING)?.is_some() {
+                    return Ok(None);
+                }
                 if let Some(i) = s.apps().integration(&d, KIND)? {
                     return Ok(Some(s.apps().get(&i.connection_id)?));
                 }
