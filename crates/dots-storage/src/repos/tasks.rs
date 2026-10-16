@@ -256,7 +256,10 @@ impl<'a> TasksRepo<'a> {
         let stuck = self.list(&TaskFilter { status: Some(vec![TaskStatus::Running, TaskStatus::WaitingApproval]), limit: 1000, ..Default::default() })?;
         let mut out = vec![];
         for t in stuck {
-            let target = if t.retry_safe && t.attempts < t.max_attempts { TaskStatus::Queued } else { TaskStatus::WaitingUser };
+            // Um reinicio do runtime nao mata o trabalho: a tarefa volta a fila (os pontos de controle evitam repetir
+            // acoes). So fica aguardando o usuario quando os reinicios excedem as tentativas previstas.
+            let can_retry = t.attempts <= t.max_attempts;
+            let target = if can_retry { TaskStatus::Queued } else { TaskStatus::WaitingUser };
             let msg = "execucao interrompida por reinicio do runtime";
             let updated = self.set_status(&t.id, target, Some(msg))?;
             out.push((updated, target));

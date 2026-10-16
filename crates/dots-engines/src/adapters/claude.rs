@@ -112,6 +112,15 @@ impl AgentEngine for ClaudeAdapter {
             }
             "assistant" => {
                 let mut out = vec![];
+                // `message.usage` e da chamada individual: entrada + cache = tamanho do contexto neste ponto.
+                // (O `usage` do evento `result` e a soma de todas as chamadas, nao serve para isso.)
+                if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
+                    let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+                    let total = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+                    if total > 0 {
+                        st.context_tokens = Some(total);
+                    }
+                }
                 if let Some(content) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
                     for c in content {
                         match c.get("type").and_then(|x| x.as_str()) {
@@ -166,6 +175,7 @@ impl AgentEngine for ClaudeAdapter {
                     input_tokens: usage.get("input_tokens").and_then(|x| x.as_u64()),
                     output_tokens: usage.get("output_tokens").and_then(|x| x.as_u64()),
                     cost_usd: st.cost_usd,
+                    context_tokens: st.context_tokens,
                 }];
                 if let Some(denials) = v.get("permission_denials").and_then(|d| d.as_array()) {
                     if !denials.is_empty() {
@@ -241,6 +251,9 @@ mod tests {
         assert!(matches!(evs.last(), Some(ExecutionEvent::Completed { result_text }) if result_text == "OK"));
         assert!(st.completed && !st.failed);
         assert!(st.cost_usd.unwrap() > 0.0);
+        // Unica mensagem `assistant` da fixture: input 2 + cache_creation 6579 + cache_read 0 (o `result` soma 12443+649+4 e nao e usado).
+        assert_eq!(st.context_tokens, Some(2 + 6579), "contexto medido pela ultima chamada, nao pela soma do result");
+        assert!(evs.iter().any(|e| matches!(e, ExecutionEvent::Usage { context_tokens: Some(6581), input_tokens: Some(4), .. })));
     }
 
     #[test]

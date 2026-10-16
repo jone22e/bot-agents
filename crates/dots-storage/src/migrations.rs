@@ -19,6 +19,9 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration { version: 6, name: "role_template", sql: include_str!("../../../migrations/0006_role_template.sql") },
     Migration { version: 7, name: "work_group", sql: include_str!("../../../migrations/0007_work_group.sql") },
     Migration { version: 8, name: "teams", sql: include_str!("../../../migrations/0008_teams.sql") },
+    Migration { version: 9, name: "dismissals", sql: include_str!("../../../migrations/0009_dismissals.sql") },
+    Migration { version: 10, name: "group_chat", sql: include_str!("../../../migrations/0010_group_chat.sql") },
+    Migration { version: 11, name: "learned_permissions", sql: include_str!("../../../migrations/0011_learned_permissions.sql") },
 ];
 
 pub fn latest_version() -> u32 {

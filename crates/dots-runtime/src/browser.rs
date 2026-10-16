@@ -132,6 +132,8 @@ pub struct Browser {
     session: tokio::sync::Mutex<Option<String>>,
     /// Serializa operacoes de pagina.
     op: tokio::sync::Mutex<()>,
+    /// Dialogo nativo aberto na pagina (`alert`/`confirm`/`prompt`): enquanto existir, a pagina nao roda JavaScript.
+    dialog: Arc<Mutex<Option<String>>>,
 }
 
 impl Browser {
@@ -192,7 +194,8 @@ impl Browser {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let (events, _) = broadcast::channel(64);
-        tokio::spawn(read_loop(reader, pending.clone(), alive.clone(), events.clone(), pid));
+        let dialog = Arc::new(Mutex::new(None));
+        tokio::spawn(read_loop(reader, pending.clone(), alive.clone(), events.clone(), dialog.clone(), pid));
 
         let b = Self {
             binary,
@@ -206,6 +209,7 @@ impl Browser {
             screencast: AtomicBool::new(false),
             session: tokio::sync::Mutex::new(None),
             op: tokio::sync::Mutex::new(()),
+            dialog,
         };
         // Primeiro contato: confirma que o canal responde.
         let v = b.call(None, "Browser.getVersion", json!({})).await?;
@@ -280,6 +284,7 @@ impl Browser {
         let sid = attached.get("sessionId").and_then(|x| x.as_str()).map(String::from).ok_or_else(|| DotsError::Io("Target.attachToTarget sem sessionId".into()))?;
         self.call(Some(&sid), "Page.enable", json!({})).await?;
         self.call(Some(&sid), "Runtime.enable", json!({})).await?;
+        self.call(Some(&sid), "DOM.enable", json!({})).await?;
         if self.screencast.load(Ordering::SeqCst) {
             let _ = self.call(Some(&sid), "Page.startScreencast", serde_json::from_str(SCREENCAST_PARAMS).unwrap()).await;
         }
@@ -296,7 +301,18 @@ impl Browser {
     pub async fn start_screencast(&self) -> DotsResult<()> {
         self.screencast.store(true, Ordering::SeqCst);
         let sid = self.page_session().await?;
-        self.call(Some(&sid), "Page.startScreencast", serde_json::from_str(SCREENCAST_PARAMS).unwrap()).await?;
+        match self.call(Some(&sid), "Page.startScreencast", serde_json::from_str(SCREENCAST_PARAMS).unwrap()).await {
+            Ok(_) => Ok(()),
+            // Painel reaberto antes do Chrome encerrar o screencast anterior: segue usando o que ja esta ativo.
+            Err(e) if e.message().contains("already active") => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Define um cookie para `url` (login de um app conectado, ex.: sessao do Flexi) antes de navegar.
+    pub async fn set_cookie(&self, name: &str, value: &str, url: &str) -> DotsResult<()> {
+        let sid = self.page_session().await?;
+        self.call(Some(&sid), "Network.setCookie", json!({ "name": name, "value": value, "url": url })).await?;
         Ok(())
     }
 
@@ -339,6 +355,9 @@ impl Browser {
     async fn wait_loaded(&self, sid: &str) -> bool {
         let start = tokio::time::Instant::now();
         while start.elapsed() < LOAD_TIMEOUT {
+            if self.dialog().is_some() {
+                return true;
+            }
             let r = self.call(Some(sid), "Runtime.evaluate", json!({ "expression": "document.readyState", "returnByValue": true })).await;
             if let Ok(v) = r {
                 if v.pointer("/result/value").and_then(|x| x.as_str()) == Some("complete") {
@@ -351,6 +370,9 @@ impl Browser {
     }
 
     async fn snapshot_in(&self, sid: &str, loaded: bool) -> DotsResult<PageSnapshot> {
+        if let Some(d) = self.dialog() {
+            return Ok(PageSnapshot { url: self.current_url().await.unwrap_or_default(), title: String::new(), loaded: true, text: dialog_note(&d) });
+        }
         let meta = self
             .call(Some(sid), "Runtime.evaluate", json!({ "expression": "JSON.stringify({t: document.title, u: location.href})", "returnByValue": true }))
             .await?;
@@ -374,6 +396,183 @@ impl Browser {
         Ok(PageSnapshot { url, title, loaded, text })
     }
 
+    /// Dialogo nativo aberto na pagina, como `confirm: "Deseja excluir?"`.
+    pub fn dialog(&self) -> Option<String> {
+        self.dialog.lock().unwrap().clone()
+    }
+
+    /// URL da aba de trabalho sem rodar JavaScript na pagina (funciona com dialogo aberto).
+    pub async fn current_url(&self) -> DotsResult<String> {
+        let targets = self.call(None, "Target.getTargets", json!({})).await?;
+        Ok(targets
+            .get("targetInfos")
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.iter().find(|t| t.get("type").and_then(|x| x.as_str()) == Some("page")))
+            .and_then(|t| t.get("url").and_then(|u| u.as_str()))
+            .unwrap_or("")
+            .to_string())
+    }
+
+    /// Papel e nome de um elemento da ultima leitura (`[ref=N]`), ex.: `button "Excluir anuncio"`.
+    pub async fn describe(&self, backend: u64) -> DotsResult<String> {
+        let sid = self.page_session().await?;
+        let ax = self.call(Some(&sid), "Accessibility.getPartialAXTree", json!({ "backendNodeId": backend, "fetchRelatives": false })).await.map_err(|e| ref_error(backend, e))?;
+        let node = ax.get("nodes").and_then(|n| n.as_array()).and_then(|a| a.first()).cloned().unwrap_or(Value::Null);
+        let role = node.pointer("/role/value").and_then(|r| r.as_str()).unwrap_or("elemento");
+        let name = node.pointer("/name/value").and_then(|r| r.as_str()).unwrap_or("").trim();
+        Ok(if name.is_empty() { role.to_string() } else { format!("{role} \"{}\"", name.chars().take(120).collect::<String>()) })
+    }
+
+    /// Releitura da pagina atual, sem navegar (conteudo que carregou depois, resultado de uma acao).
+    pub async fn read(&self) -> DotsResult<PageSnapshot> {
+        let _op = self.op.lock().await;
+        if let Some(d) = self.dialog() {
+            return Ok(PageSnapshot { url: self.current_url().await.unwrap_or_default(), title: String::new(), loaded: true, text: dialog_note(&d) });
+        }
+        let sid = self.page_session().await?;
+        self.snapshot_in(&sid, true).await
+    }
+
+    /// Clica no centro do elemento `[ref=N]` como um mouse (rola ate ele antes) e devolve a pagina depois do clique.
+    pub async fn click(&self, backend: u64) -> DotsResult<PageSnapshot> {
+        let _op = self.op.lock().await;
+        self.no_dialog()?;
+        let sid = self.page_session().await?;
+        let _ = self.call(Some(&sid), "DOM.scrollIntoViewIfNeeded", json!({ "backendNodeId": backend })).await;
+        let point = match self.call(Some(&sid), "DOM.getContentQuads", json!({ "backendNodeId": backend })).await {
+            Ok(q) => q.get("quads").and_then(|q| q.as_array()).and_then(|a| a.iter().find_map(quad_center)),
+            Err(e) if is_stale(&e) => return Err(ref_error(backend, e)),
+            Err(_) => None,
+        };
+        self.until_dialog(async {
+            match point {
+                Some((x, y)) => {
+                    self.call(Some(&sid), "Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y })).await?;
+                    self.call(Some(&sid), "Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1 })).await?;
+                    self.call(Some(&sid), "Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "buttons": 0, "clickCount": 1 })).await?;
+                }
+                // Sem caixa visivel (elemento escondido ou de tamanho zero): clique pelo DOM.
+                None => {
+                    self.call_on(&sid, backend, "function(){ this.click(); return ''; }", Value::Null).await?;
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        self.settle(&sid).await
+    }
+
+    /// Digita `text` no campo `[ref=N]` (foca antes). `clear` apaga o que havia; `submit` tecla Enter no fim.
+    pub async fn type_text(&self, backend: u64, text: &str, clear: bool, submit: bool) -> DotsResult<PageSnapshot> {
+        let _op = self.op.lock().await;
+        self.no_dialog()?;
+        let sid = self.page_session().await?;
+        let _ = self.call(Some(&sid), "DOM.scrollIntoViewIfNeeded", json!({ "backendNodeId": backend })).await;
+        self.call(Some(&sid), "DOM.focus", json!({ "backendNodeId": backend })).await.map_err(|e| ref_error(backend, e))?;
+        if clear {
+            self.call_on(&sid, backend, SELECT_ALL_JS, Value::Null).await?;
+            if text.is_empty() {
+                self.key(&sid, "Backspace").await?;
+            }
+        }
+        if !text.is_empty() {
+            self.call(Some(&sid), "Input.insertText", json!({ "text": text })).await?;
+        }
+        if submit {
+            self.until_dialog(self.key(&sid, "Enter")).await?;
+        }
+        self.settle(&sid).await
+    }
+
+    /// Tecla na pagina (Enter, Escape, Tab, setas...). Com um dialogo nativo aberto: Enter aceita, Escape cancela.
+    pub async fn press(&self, key: &str) -> DotsResult<PageSnapshot> {
+        let _op = self.op.lock().await;
+        if self.dialog().is_some() {
+            let accept = match key {
+                "Enter" => true,
+                "Escape" => false,
+                _ => return Err(DotsError::Validation("ha um dialogo do navegador aberto: use Enter (aceitar) ou Escape (cancelar)".into())),
+            };
+            // A sessao ja existe (o dialogo veio dela); page_session testaria com JavaScript, que esta parado.
+            let sid = self.session.lock().await.clone().ok_or_else(|| DotsError::Io("aba do navegador indisponivel".into()))?;
+            self.call(Some(&sid), "Page.handleJavaScriptDialog", json!({ "accept": accept })).await?;
+            *self.dialog.lock().unwrap() = None;
+            return self.settle(&sid).await;
+        }
+        if key_def(key).is_none() {
+            return Err(DotsError::Validation(format!("tecla desconhecida: {key} (use {})", KEYS.iter().map(|k| k.0).collect::<Vec<_>>().join(", "))));
+        }
+        let sid = self.page_session().await?;
+        self.until_dialog(self.key(&sid, key)).await?;
+        self.settle(&sid).await
+    }
+
+    /// Escolhe uma opcao (pelo valor ou pelo texto) na lista `<select>` `[ref=N]`.
+    pub async fn select(&self, backend: u64, option: &str) -> DotsResult<PageSnapshot> {
+        let _op = self.op.lock().await;
+        self.no_dialog()?;
+        let sid = self.page_session().await?;
+        let problem = self.call_on(&sid, backend, SELECT_JS, json!(option)).await?;
+        if !problem.is_empty() {
+            return Err(DotsError::Validation(problem));
+        }
+        self.settle(&sid).await
+    }
+
+    fn no_dialog(&self) -> DotsResult<()> {
+        match self.dialog() {
+            Some(d) => Err(DotsError::Validation(dialog_note(&d))),
+            None => Ok(()),
+        }
+    }
+
+    /// Roda a acao ate o fim ou ate abrir um dialogo nativo (o Chrome so responde a acao depois que o dialogo fecha).
+    async fn until_dialog(&self, action: impl std::future::Future<Output = DotsResult<()>>) -> DotsResult<()> {
+        tokio::pin!(action);
+        loop {
+            tokio::select! {
+                r = &mut action => return r,
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    if self.dialog().is_some() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Depois de uma acao: espera a pagina reagir (e carregar, se navegou) e devolve a leitura nova.
+    async fn settle(&self, sid: &str) -> DotsResult<PageSnapshot> {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let loaded = self.wait_loaded(sid).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        self.snapshot_in(sid, loaded).await
+    }
+
+    async fn key(&self, sid: &str, key: &str) -> DotsResult<()> {
+        let (name, code, vk, text) = key_def(key).ok_or_else(|| DotsError::Validation(format!("tecla desconhecida: {key}")))?;
+        let mut down = json!({ "type": if text.is_some() { "keyDown" } else { "rawKeyDown" }, "key": name, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk });
+        if let Some(t) = text {
+            down["text"] = json!(t);
+            down["unmodifiedText"] = json!(t);
+        }
+        self.call(Some(sid), "Input.dispatchKeyEvent", down).await?;
+        self.call(Some(sid), "Input.dispatchKeyEvent", json!({ "type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk })).await?;
+        Ok(())
+    }
+
+    /// Executa `function` com `this` = elemento `[ref=N]`; devolve o texto que a funcao retornar.
+    async fn call_on(&self, sid: &str, backend: u64, function: &str, arg: Value) -> DotsResult<String> {
+        let node = self.call(Some(sid), "DOM.resolveNode", json!({ "backendNodeId": backend })).await.map_err(|e| ref_error(backend, e))?;
+        let object_id = node.pointer("/object/objectId").and_then(|o| o.as_str()).ok_or_else(|| ref_error(backend, DotsError::Io("sem objectId".into())))?;
+        let args = if arg.is_null() { json!([]) } else { json!([{ "value": arg }]) };
+        let r = self.call(Some(sid), "Runtime.callFunctionOn", json!({ "functionDeclaration": function, "objectId": object_id, "arguments": args, "returnByValue": true })).await?;
+        if let Some(ex) = r.get("exceptionDetails") {
+            return Err(DotsError::Io(format!("erro na pagina: {}", ex.pointer("/exception/description").and_then(|d| d.as_str()).unwrap_or("excecao"))));
+        }
+        Ok(r.pointer("/result/value").and_then(|v| v.as_str()).unwrap_or("").to_string())
+    }
+
     /// Encerra o processo (SIGTERM no grupo; SIGKILL se nao sair em 3 s).
     pub async fn close(&self) {
         self.alive.store(false, Ordering::SeqCst);
@@ -389,8 +588,69 @@ impl Browser {
     }
 }
 
+/// Seleciona o conteudo do campo (o texto digitado em seguida substitui o anterior).
+const SELECT_ALL_JS: &str = "function(){ if (typeof this.select === 'function') { this.select(); } else { const r = document.createRange(); r.selectNodeContents(this); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } return ''; }";
+/// Escolhe a opcao de um `<select>` pelo valor ou pelo texto, pelo setter nativo (funciona com React) e avisa a pagina.
+const SELECT_JS: &str = "function(v){ if (this.tagName !== 'SELECT') return 'o elemento nao e uma lista de opcoes (select): clique nele e depois na opcao'; const norm = (s) => (s || '').trim().toLowerCase(); const opts = [...this.options]; const o = opts.find((x) => x.value === v) || opts.find((x) => norm(x.textContent) === norm(v)); if (!o) return 'opcao nao encontrada; opcoes: ' + opts.map((x) => x.textContent.trim()).join(' | '); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(this, o.value); this.dispatchEvent(new Event('input', { bubbles: true })); this.dispatchEvent(new Event('change', { bubbles: true })); return ''; }";
+
+/// Teclas aceitas: (nome, code, keyCode, texto inserido).
+const KEYS: &[(&str, &str, i64, Option<&str>)] = &[
+    ("Enter", "Enter", 13, Some("\r")),
+    ("Escape", "Escape", 27, None),
+    ("Tab", "Tab", 9, None),
+    ("Backspace", "Backspace", 8, None),
+    ("Delete", "Delete", 46, None),
+    ("Space", "Space", 32, Some(" ")),
+    ("ArrowUp", "ArrowUp", 38, None),
+    ("ArrowDown", "ArrowDown", 40, None),
+    ("ArrowLeft", "ArrowLeft", 37, None),
+    ("ArrowRight", "ArrowRight", 39, None),
+    ("PageUp", "PageUp", 33, None),
+    ("PageDown", "PageDown", 34, None),
+    ("Home", "Home", 36, None),
+    ("End", "End", 35, None),
+];
+
+fn key_def(key: &str) -> Option<(&'static str, &'static str, i64, Option<&'static str>)> {
+    KEYS.iter().find(|k| k.0.eq_ignore_ascii_case(key)).map(|k| (if k.0 == "Space" { " " } else { k.0 }, k.1, k.2, k.3))
+}
+
+/// Centro de um quad (`[x1,y1,...,x4,y4]`, coordenadas da tela da aba); None se nao tiver area.
+fn quad_center(q: &Value) -> Option<(f64, f64)> {
+    let p: Vec<f64> = q.as_array()?.iter().filter_map(|v| v.as_f64()).collect();
+    if p.len() != 8 {
+        return None;
+    }
+    let (xs, ys) = ([p[0], p[2], p[4], p[6]], [p[1], p[3], p[5], p[7]]);
+    let w = xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+    let h = ys.iter().cloned().fold(f64::MIN, f64::max) - ys.iter().cloned().fold(f64::MAX, f64::min);
+    if w < 1.0 || h < 1.0 {
+        return None;
+    }
+    Some((xs.iter().sum::<f64>() / 4.0, ys.iter().sum::<f64>() / 4.0))
+}
+
+fn is_stale(e: &DotsError) -> bool {
+    let m = e.message().to_ascii_lowercase();
+    m.contains("node with given id") || m.contains("no node") || m.contains("does not belong to the document")
+}
+
+/// Erro de um `ref` que nao existe mais (a pagina mudou desde a ultima leitura).
+fn ref_error(backend: u64, e: DotsError) -> DotsError {
+    if is_stale(&e) {
+        DotsError::Validation(format!("o elemento [ref={backend}] nao existe mais na pagina: leia a pagina de novo (dots_browser_read) e use um ref atual"))
+    } else {
+        e
+    }
+}
+
+/// Texto devolvido enquanto um dialogo nativo esta aberto.
+fn dialog_note(d: &str) -> String {
+    format!("Dialogo do navegador aberto ({d}). A pagina fica parada ate responder: dots_browser_press com Enter aceita (OK) e com Escape cancela.")
+}
+
 /// Le mensagens `\0`-terminadas: respostas vao aos chamadores, eventos aos assinantes.
-async fn read_loop(mut reader: pipe::Receiver, pending: Pending, alive: Arc<AtomicBool>, events: broadcast::Sender<Value>, pid: u32) {
+async fn read_loop(mut reader: pipe::Receiver, pending: Pending, alive: Arc<AtomicBool>, events: broadcast::Sender<Value>, dialog: Arc<Mutex<Option<String>>>, pid: u32) {
     let mut buf = Vec::with_capacity(64 * 1024);
     let mut chunk = [0u8; 16 * 1024];
     loop {
@@ -406,6 +666,15 @@ async fn read_loop(mut reader: pipe::Receiver, pending: Pending, alive: Arc<Atom
                             let _ = tx.send(v);
                         }
                     } else {
+                        match v.get("method").and_then(|m| m.as_str()) {
+                            Some("Page.javascriptDialogOpening") => {
+                                let kind = v.pointer("/params/type").and_then(|t| t.as_str()).unwrap_or("alert");
+                                let msg = v.pointer("/params/message").and_then(|t| t.as_str()).unwrap_or("");
+                                *dialog.lock().unwrap() = Some(format!("{kind}: \"{}\"", msg.chars().take(300).collect::<String>()));
+                            }
+                            Some("Page.javascriptDialogClosed") => *dialog.lock().unwrap() = None,
+                            _ => {}
+                        }
                         tracing::trace!(pid, method = v.get("method").and_then(|m| m.as_str()).unwrap_or("?"), "evento CDP");
                         let _ = events.send(v);
                     }
@@ -669,6 +938,60 @@ mod tests {
         let i1243 = labels.iter().position(|l| *l == "Chromium (Playwright 1243)").unwrap();
         let i1187 = labels.iter().position(|l| *l == "Chromium (Playwright 1187)").unwrap();
         assert!(i1243 < i1187, "o build mais novo vem primeiro");
+    }
+
+    /// `[ref=N]` da primeira linha da leitura que contem `needle`.
+    fn ref_of(text: &str, needle: &str) -> u64 {
+        let line = text.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle} nao esta na pagina:\n{text}"));
+        line.split("[ref=").nth(1).and_then(|r| r.split(']').next()).and_then(|n| n.parse().ok()).unwrap()
+    }
+
+    /// Prova real das acoes: clique, digitacao com Enter, lista de opcoes, dialogo `confirm` e ref vencido.
+    #[tokio::test]
+    async fn real_browser_clicks_types_selects_and_answers_dialogs() {
+        let home = crate::paths::home_dir().unwrap();
+        let Some(binary) = detect_binary(&home, None) else {
+            eprintln!("sem navegador na maquina; teste ignorado");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let b = Browser::launch(binary, &dir.path().join("dot-acoes"), &home, &LaunchOptions { headless: true, executable: None }).await.unwrap();
+        let html = "data:text/html,<title>Acoes</title>\
+            <button onclick=\"document.getElementById('out').textContent='clicou'\">Excluir anuncio</button><p id=out>nada</p>\
+            <input aria-label='Busca' onkeydown=\"if(event.key==='Enter'){document.title='enviou '+this.value}\">\
+            <select aria-label='Status' onchange=\"document.getElementById('sel').textContent='status '+this.value\"><option value='0'>Ativo</option><option value='11'>Finalizado</option></select><p id=sel>-</p>\
+            <button onclick=\"document.getElementById('out').textContent=confirm('Deseja excluir?')?'confirmado':'desistiu'\">Confirmar exclusao</button>";
+        let page = b.open(html).await.unwrap();
+
+        let after = b.click(ref_of(&page.text, "button \"Excluir anuncio\"")).await.unwrap();
+        assert!(after.text.contains("clicou"), "{}", after.text);
+        assert_eq!(b.describe(ref_of(&page.text, "button \"Excluir anuncio\"")).await.unwrap(), "button \"Excluir anuncio\"");
+
+        let busca = ref_of(&page.text, "textbox \"Busca\"");
+        b.type_text(busca, "rascunho", false, false).await.unwrap();
+        let typed = b.type_text(busca, "kit 20", true, true).await.unwrap();
+        assert_eq!(typed.title, "enviou kit 20", "clear substitui o texto e submit tecla Enter");
+
+        let chosen = b.select(ref_of(&page.text, "combobox \"Status\""), "Finalizado").await.unwrap();
+        assert!(chosen.text.contains("status 11"), "{}", chosen.text);
+        let wrong = b.select(ref_of(&page.text, "combobox \"Status\""), "Pausado").await.unwrap_err();
+        assert!(wrong.message().contains("Ativo | Finalizado"), "{}", wrong.message());
+
+        let confirm = ref_of(&page.text, "button \"Confirmar exclusao\"");
+        let asked = b.click(confirm).await.unwrap();
+        assert!(asked.text.contains("Deseja excluir?") && b.dialog().is_some(), "{}", asked.text);
+        assert!(b.click(confirm).await.is_err(), "com dialogo aberto, so dots_browser_press");
+        let cancelled = b.press("Escape").await.unwrap();
+        assert!(cancelled.text.contains("desistiu"), "{}", cancelled.text);
+        b.click(confirm).await.unwrap();
+        let accepted = b.press("Enter").await.unwrap();
+        assert!(accepted.text.contains("confirmado") && b.dialog().is_none(), "{}", accepted.text);
+
+        b.open("data:text/html,<title>Outra</title><p>x</p>").await.unwrap();
+        let stale = b.click(confirm).await.unwrap_err();
+        assert!(stale.message().contains("nao existe mais"), "{}", stale.message());
+        assert!(b.press("F13").await.is_err());
+        b.close().await;
     }
 
     /// Prova real: inicia o navegador detectado na maquina, abre uma pagina e le o conteudo.

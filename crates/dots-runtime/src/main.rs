@@ -5,11 +5,15 @@ mod agy_setup;
 mod browser;
 mod browser_ipc;
 mod cli;
+mod cli_updates;
 mod delegation;
+mod dismissal;
 mod events;
 mod executor;
 mod flexi;
 mod flexi_team;
+mod group;
+mod hiring;
 mod teams;
 mod gateway;
 mod lock;
@@ -23,6 +27,7 @@ mod service;
 mod shutdown;
 mod stats;
 mod tools;
+mod usage;
 mod watcher;
 
 use std::sync::Arc;
@@ -246,6 +251,8 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         schedules_notify: tokio::sync::Notify::new(),
         watcher: watcher.clone(),
         event_depths: std::sync::Mutex::new(std::collections::HashMap::new()),
+        usage: crate::usage::UsageCache::default(),
+        cli_updates: crate::cli_updates::UpdatesCache::default(),
         browsers: crate::browser::BrowserPool::new(paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")), layout.browsers_dir.clone()),
         flexi: crate::flexi::FlexiRegistry::new(if std::env::var("DOTS_SECRETS").as_deref() == Ok("memory") {
             Arc::new(dots_flexi::MemoryStore::default())

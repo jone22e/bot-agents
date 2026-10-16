@@ -15,7 +15,18 @@ use crate::policy::{AuthorizedDir, ExecutionContext};
 use crate::service::RuntimeService;
 
 const MAX_MEMORY_CHARS: usize = 6000;
+/// Limite das licoes de demissao nas instrucoes (as mais recentes primeiro).
+const MAX_LESSON_CHARS: usize = 2500;
 const MAX_ATTACHMENT_CHARS: usize = 40_000;
+/// Tamanho de contexto (tokens na ultima chamada ao modelo) a partir do qual a sessao do motor e
+/// encerrada ao fim da tarefa: a proxima tarefa da conversa comeca com sessao nova, so com memorias.
+/// Evita pagar um historico gigante a cada turno; a continuidade vem de memorias, historico e checkpoints.
+const SESSION_ROTATE_CONTEXT_TOKENS: u64 = 100_000;
+
+/// Decide se a sessao do motor deve ser encerrada apos a tarefa: so quando concluiu e o contexto medido passou do limite.
+fn should_rotate_session(status: ExecutionStatus, context_tokens: Option<u64>) -> bool {
+    status == ExecutionStatus::Completed && context_tokens.is_some_and(|n| n >= SESSION_ROTATE_CONTEXT_TOKENS)
+}
 
 fn random_token() -> String {
     use rand::RngCore;
@@ -86,27 +97,57 @@ impl RuntimeService {
         let attachments = self.storage.call({ let id = task.id.clone(); move |s| s.tasks().attachments(&id) }).await.unwrap_or_default();
         let memories = self.storage.call({ let (d, q) = (dot_id.clone(), task.prompt.clone()); move |s| s.memories().search(&d, &q, &[MemoryKind::LongTerm, MemoryKind::History], 12) }).await.unwrap_or_default();
         let working = self.storage.call({ let (d, src) = (dot_id.clone(), format!("task:{}", task.id)); move |s| Ok(s.memories().list(&d, Some(MemoryKind::Working), 50)?.into_iter().find(|m| m.source.as_deref() == Some(&src))) }).await.ok().flatten();
+        // Licoes de demissoes na equipe (como funcionario ou como gerente): entram nas instrucoes para ninguem repetir o erro.
+        let lessons = self.storage.call({ let d = dot_id.clone(); move |s| {
+            let mut out: Vec<dots_core::Dismissal> = vec![];
+            if let Some(team) = s.teams().member_of(&d)? { out.extend(s.dismissals().for_team(&team.id, 20)?); }
+            if let Some(team) = s.teams().managed_by(&d)? { for x in s.dismissals().for_team(&team.id, 20)? { if !out.iter().any(|o| o.id == x.id) { out.push(x); } } }
+            Ok(out)
+        } }).await.unwrap_or_default();
+        // Gerente: quantos funcionarios tem e o limite do usuario (para contratar quando faltar quem faca).
+        let hiring = if dot.role == DotRole::Supervisor {
+            let members = self.storage.call({ let d = dot_id.clone(); move |s| Ok(s.teams().managed_by(&d)?.map(|t| t.member_ids.len()).unwrap_or(0)) }).await.unwrap_or(0);
+            Some((members, self.max_employees_per_manager().await))
+        } else {
+            None
+        };
         let checkpoint = if t.attempts > 1 || task.origin.starts_with("followup:") {
             self.storage.call({ let id = if task.origin.starts_with("followup:") { task.origin.trim_start_matches("followup:").to_string() } else { task.id.clone() }; move |s| s.checkpoints().latest(&id) }).await.ok().flatten()
         } else {
             None
         };
-        // DOT ligado ao Flexi recebe o mapa do Flexi (marketplaces, Google Shopping x Google Ads).
-        let flexi_context = self.storage.call({ let d = dot_id.clone(); move |s| s.apps().integration(&d, crate::flexi::KIND) }).await.ok().flatten().map(|_| crate::flexi::FLEXI_CONTEXT);
-        let system_instructions = build_instructions(&dot, &policy, &dirs, &memories, working.as_ref().map(|m| m.content.as_str()), resume_session.is_some(), checkpoint.as_ref(), t.attempts, flexi_context);
+        // DOT ligado ao Flexi recebe o mapa do Flexi (marketplaces, Google Shopping x Google Ads) e o navegador abre no Flexi logado.
+        let flexi_conn = self.flexi_connection_for_dot(&dot_id).await.ok().flatten();
+        let flexi_context = flexi_conn.as_ref().map(|_| crate::flexi::FLEXI_CONTEXT);
+        let app_hosts: Vec<String> = flexi_conn.iter().map(|c| crate::policy::url_host(&c.base_url)).filter(|h| !h.is_empty()).collect();
+        // Instrucoes estaveis por DOT vao no system prompt (iguais entre turnos: preservam o cache do CLI);
+        // o que muda a cada tarefa (memorias, checkpoint, estado de trabalho) vai no prompt da tarefa.
+        let system_instructions = build_instructions(&dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring);
+        // Conversa com turnos anteriores do DOT mas sem sessao do motor: a sessao foi encerrada (por tamanho ou falha).
+        let session_reset = resume_session.is_none()
+            && match &task.conversation_id {
+                Some(cid) => self.storage.call({ let c = cid.clone(); move |s| s.conversations().messages(&c, 0) }).await.map(|ms| ms.iter().any(|m| m.role == MessageRole::Dot)).unwrap_or(false),
+                None => false,
+            };
+        let task_context = build_task_context(&memories, working.as_ref().map(|m| m.content.as_str()), resume_session.is_some(), session_reset, checkpoint.as_ref(), t.attempts);
         // Checkpoint inicial da tentativa.
         let _ = self.storage.call({ let (tid, eid, att) = (task.id.clone(), execution.id.clone(), t.attempts); move |s| s.checkpoints().create(&tid, &eid, &format!("inicio da tentativa {att}"), &json!({}), "", "", &[], "", &[], "auto") }).await;
-        let mut prompt = task.prompt.clone();
+        // O pedido do usuario vem primeiro; o contexto entra num bloco logo depois (antes dos anexos).
+        let mut prompt = if task_context.is_empty() { task.prompt.clone() } else { format!("{}\n\n<contexto_da_tarefa>\n{task_context}</contexto_da_tarefa>", task.prompt) };
         let tmp_ctx = ExecutionContext {
             token: String::new(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
-            workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: mpsc::channel(1).0,
+            workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: mpsc::channel(1).0, app_hosts: app_hosts.clone(),
         };
         for a in &attachments {
-            match tmp_ctx.authorize_path(a, false).and_then(|p| std::fs::read_to_string(&p).map_err(|e| DotsError::Io(e.to_string())).map(|c| (p, c))) {
-                Ok((p, content)) => {
-                    let c: String = content.chars().take(MAX_ATTACHMENT_CHARS).collect();
-                    prompt.push_str(&format!("\n\n<attachment path=\"{}\">\n{}\n</attachment>", p.display(), c));
-                }
+            match tmp_ctx.authorize_path(a, false).and_then(|p| std::fs::read(&p).map_err(|e| DotsError::Io(e.to_string())).map(|c| (p, c))) {
+                Ok((p, bytes)) => match String::from_utf8(bytes) {
+                    Ok(content) => {
+                        let c: String = content.chars().take(MAX_ATTACHMENT_CHARS).collect();
+                        prompt.push_str(&format!("\n\n<attachment path=\"{}\">\n{}\n</attachment>", p.display(), c));
+                    }
+                    // Imagem, PDF, planilha...: o motor abre pelo caminho com as proprias ferramentas de leitura.
+                    Err(_) => prompt.push_str(&format!("\n\n<attachment path=\"{}\" binary=\"true\">Arquivo binario anexado pelo usuario (imagem, PDF ou similar). Abra pelo caminho para ver o conteudo.</attachment>", p.display())),
+                },
                 Err(e) => prompt.push_str(&format!("\n\n[anexo {a} indisponivel: {}]", e.message())),
             }
         }
@@ -127,7 +168,7 @@ impl RuntimeService {
         let (ev_tx, mut ev_rx) = mpsc::channel::<ExecutionEvent>(256);
         let ctx = Arc::new(ExecutionContext {
             token: token.clone(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
-            workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: ev_tx,
+            workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: ev_tx, app_hosts: app_hosts.clone(),
         });
         let req = ExecutionRequest {
             execution_id: execution.id.clone(),
@@ -184,6 +225,7 @@ impl RuntimeService {
         let mut outcome: Option<(ExecutionStatus, Option<String>, FailureKind)> = None;
         let mut cost: Option<f64> = None;
         let mut usage = json!({});
+        let mut last_context_tokens: Option<u64> = None;
         let mut tool_names: Vec<String> = vec![];
         let mut steps: Vec<String> = vec![];
         let mut done = false;
@@ -211,8 +253,10 @@ impl RuntimeService {
                     tool_names.push(name.clone());
                     steps.push(format!("ferramenta {name}"));
                 }
-                ExecutionEvent::Usage { cost_usd, .. } => {
+                ExecutionEvent::Usage { input_tokens, output_tokens, cost_usd, context_tokens } => {
                     cost = cost_usd.or(cost);
+                    last_context_tokens = context_tokens.or(last_context_tokens);
+                    usage = json!({ "input_tokens": input_tokens, "output_tokens": output_tokens, "context_tokens": last_context_tokens });
                 }
                 ExecutionEvent::Completed { result_text } => {
                     if !result_text.is_empty() {
@@ -257,6 +301,13 @@ impl RuntimeService {
                 let c = cid.clone();
                 let _ = self.storage.call(move |st| st.conversations().set_engine_session(&c, engine, None)).await;
                 tracing::warn!(session = %sess, "sessao do motor descartada apos falha na retomada");
+            }
+        } else if should_rotate_session(status, last_context_tokens) {
+            // Contexto grande demais: encerra a sessao; a proxima tarefa da conversa recomeca so com memorias.
+            if let Some(cid) = &task.conversation_id {
+                let c = cid.clone();
+                let _ = self.storage.call(move |st| st.conversations().set_engine_session(&c, engine, None)).await;
+                tracing::info!(conversation = %cid, context_tokens = last_context_tokens.unwrap_or(0), "sessao do motor encerrada por tamanho do contexto");
             }
         }
 
@@ -317,7 +368,9 @@ impl RuntimeService {
     }
 }
 
-fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], memories: &[dots_core::Memory], working: Option<&str>, resumed: bool, checkpoint: Option<&dots_core::Checkpoint>, attempt: u32, app_context: Option<&str>) -> String {
+/// Instrucoes estaveis do DOT (identidade, regras, papel, licoes). Nao dependem da tarefa: ficam iguais entre
+/// turnos da mesma conversa, o que preserva o cache de prompt do CLI em sessoes retomadas.
+fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], app_context: Option<&str>, browser_hosts: &[String], lessons: &[dots_core::Dismissal], hiring: Option<(usize, u32)>) -> String {
     let mut s = String::new();
     s.push_str(&format!("Voce e \"{}\", um DOT (trabalhador digital persistente) na plataforma DOTS.\n", dot.name));
     if !dot.description.trim().is_empty() {
@@ -338,8 +391,16 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
         s.push_str(&format!("- Diretorio autorizado: {} ({}{})\n", d.path.display(), if d.can_read { "leitura" } else { "" }, if d.can_write { "+escrita" } else { "" }));
     }
     s.push_str("- Use as ferramentas do servidor MCP `dots` (dots_read_file, dots_write_file, dots_list_dir, dots_search, dots_run_command, dots_git, dots_remember, dots_recall) para acessar arquivos, comandos e memoria. Elas sao autorizadas pelo runtime; uma negacao e definitiva: nao tente contornar.\n");
-    if policy.allow_network {
-        s.push_str("- Voce tem um navegador proprio (perfil isolado deste DOT, logins persistem): dots_browser_open abre uma URL e devolve a pagina em texto com [ref=N] por elemento.\n");
+    s.push_str("- Voce so trabalha quando chega uma tarefa: passado um horario, nada te acorda sozinho. Para fazer algo depois ou de tempos em tempos (rodadas, relatorios por hora, \"proxima rodada as HH:MM\"), crie um agendamento com dots_schedule_create; no horario o runtime cria a tarefa com o pedido. NUNCA prometa um horario futuro sem ter agendado. Antes de agendar, confira dots_schedule_list para nao duplicar; cancele com dots_schedule_cancel o que nao for mais preciso. Diga ao usuario o que agendou e quando.\n");
+    if policy.allow_network || !browser_hosts.is_empty() {
+        s.push_str("- Voce tem um navegador proprio (perfil isolado deste DOT, logins persistem): dots_browser_open abre uma URL e devolve a pagina em texto com [ref=N] por elemento; para agir nela use dots_browser_click (clicar), dots_browser_type (digitar), dots_browser_select (escolher opcao), dots_browser_press (teclas, e Enter/Escape em dialogos do navegador) e dots_browser_read (ler de novo). Cada acao devolve a pagina atualizada com refs novos. E o UNICO navegador autorizado: nao use ferramentas de computador ou navegador do proprio assistente (cua, computer use, browser use); elas sao negadas e o usuario nao ve nada. O que voce abre com dots_browser_open o usuario acompanha ao vivo no painel Computador. Abrir paginas e agir nelas no seu navegador NAO precisa de autorizacao previa do usuario: use direto, sem perguntar antes com dots_ask_user. Cliques que gravam ou sao irreversiveis (Salvar, Excluir, Publicar...) passam pela aprovacao do proprio runtime, que pergunta sozinho.");
+        if !browser_hosts.is_empty() {
+            s.push_str(&format!(" Apps conectados que ja abrem logados: {}.", browser_hosts.join(", ")));
+        }
+        if !policy.allow_network {
+            s.push_str(" Outros sites exigem liberar a internet em Permissoes.");
+        }
+        s.push('\n');
     }
     s.push_str(&format!("- Nivel de aprovacao automatica: {}. Acoes acima disso aguardam aprovacao do usuario (pode demorar).\n", policy.auto_approve_level.as_str()));
     if !policy.allowed_commands.is_empty() {
@@ -347,13 +408,41 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
     }
     s.push_str("- Ao concluir, responda com um resumo objetivo do que foi feito e do que ficou pendente.\n");
     s.push_str("- Em trabalhos longos, grave pontos de controle com dots_checkpoint apos cada etapa concluida.\n");
-    if resumed {
-        s.push_str("- Esta e uma continuacao da conversa anterior.\n");
-    }
     if dot.role == DotRole::Supervisor {
-        s.push_str("\nVoce e um SUPERVISOR: divide objetivos em pedidos claros, delega a DOTs da equipe (dots_list_team, dots_delegate), acompanha (dots_delegation_status), identifica bloqueios e consolida as entregas. Delegacoes sao assincronas: apos delegar, termine o turno dizendo o que aguarda; os resultados chegam em uma tarefa de continuacao. Perguntas dos seus funcionarios sobre pedidos delegados chegam a voce como tarefas: responda com dots_answer_question. Use dots_ask_user so quando uma decisao for do usuario. Voce nao pode alterar permissoes de ninguem.\n");
+        s.push_str("\nVoce e um SUPERVISOR (gerente): divide objetivos em pedidos claros, delega a DOTs da equipe (dots_list_team, dots_delegate), acompanha (dots_delegation_status), identifica bloqueios e consolida as entregas. Voce NUNCA executa o trabalho da equipe, mesmo sem nenhum funcionario: so consulta, delega, acompanha e responde; acoes que alteram algo sao negadas para voce. Se nao houver funcionario para a tarefa (ou todos estiverem ocupados com outra coisa), contrate um com dots_hire_employee: voce cria o nome (unico, de pessoa) e define a funcao e as instrucoes; depois delegue a ele. Delegacoes sao assincronas: apos delegar, termine o turno dizendo o que aguarda; os resultados chegam em uma tarefa de continuacao. Perguntas e pedidos de permissao dos seus funcionarios sobre pedidos delegados chegam a voce como tarefas: responda com dots_answer_question e decida com dots_decide_approval (aprove o que esta dentro do pedido e do que o usuario autorizou; acoes irreversiveis que o usuario nao autorizou, confirme antes com ele). Use dots_ask_user so quando uma decisao for do usuario. Voce e responsavel por fazer a equipe trabalhar: quando o usuario perguntar pelo andamento, consulte dots_delegation_status antes de responder; se um funcionario esta PARADO (interrompido ou com falha), retome com dots_resume_delegation ou delegue de novo com instrucoes melhores, em vez de so relatar que ele nao esta trabalhando. Voce nao pode alterar permissoes de ninguem. Se um funcionario errar de forma grave ou repetir o mesmo erro depois de instrucoes melhores, voce pode demiti-lo com dots_dismiss_employee (informe o motivo e a licao); isso passa pela aprovacao do usuario, EXCLUI o funcionario e registra a licao para toda a equipe; em seguida contrate um substituto com dots_hire_employee e delegue a ele de novo.\n");
+        if let Some((members, limit)) = hiring {
+            s.push_str(&format!("- Sua equipe tem {members} funcionario(s); o limite definido pelo usuario e {limit} por gerente.\n"));
+        }
     } else if !policy.can_delegate_to.is_empty() {
         s.push_str("- Voce pode delegar pedidos a outros DOTs (dots_list_team, dots_delegate). Delegacoes sao assincronas.\n");
+    }
+    if !lessons.is_empty() {
+        s.push_str(if dot.role == DotRole::Supervisor {
+            "\nDemissoes na sua equipe (funcionarios que voce demitiu; cobre que os erros nao se repitam):\n"
+        } else {
+            "\nLicoes de demissoes na sua equipe (funcionarios anteriores demitidos pelo gerente; NAO repita estes erros):\n"
+        });
+        let mut used = 0usize;
+        for l in lessons {
+            let line = format!("- {} ({}): demitido por {} em {}. Motivo: {}. Licao: {}\n", l.dot_name, l.team_name, l.manager_name, l.created_at.format("%d/%m/%Y"), l.reason.trim(), l.lesson.trim());
+            if used + line.len() > MAX_LESSON_CHARS {
+                break;
+            }
+            used += line.len();
+            s.push_str(&line);
+        }
+    }
+    s
+}
+
+/// Contexto que muda a cada tarefa: retomada, checkpoint, estado de trabalho e memorias relevantes.
+/// Vai no prompt da tarefa (nao no system prompt) para nao invalidar o cache da conversa.
+fn build_task_context(memories: &[dots_core::Memory], working: Option<&str>, resumed: bool, session_reset: bool, checkpoint: Option<&dots_core::Checkpoint>, attempt: u32) -> String {
+    let mut s = String::new();
+    if resumed {
+        s.push_str("Esta e uma continuacao da conversa anterior.\n");
+    } else if session_reset {
+        s.push_str("Esta conversa continua de antes, mas a sessao do motor foi reiniciada: o historico detalhado nao esta neste contexto. O que foi feito esta nas memorias abaixo e em dots_recall; se faltar algo, pergunte ao usuario em vez de supor.\n");
     }
     if let Some(cp) = checkpoint {
         s.push_str(&format!("\nRetomada (tentativa {attempt}). Ultimo ponto de controle:\n- Etapa: {}\n- Resultados: {}\n- Proxima acao: {}\n- Arquivos produzidos: {}\nNao repita etapas ja concluidas; o runtime devolve o resultado gravado se uma acao identica for repetida.\n", cp.step, if cp.results.is_empty() { "(nenhum)".into() } else { cp.results.chars().take(1500).collect::<String>() }, if cp.next_action.is_empty() { "(nao informada)".into() } else { cp.next_action.clone() }, if cp.artifacts.is_empty() { "(nenhum)".into() } else { cp.artifacts.join(", ") }));
@@ -385,9 +474,29 @@ mod tests {
         let dot = dots_core::Dot { id: "d".into(), name: "QA".into(), description: "testa".into(), objective: "qualidade".into(), instructions: "seja rigoroso".into(), primary_engine: None, model: None, workspace_path: Some("/ws".into()), limits: Default::default(), status: dots_core::DotStatus::Active, role: DotRole::Worker, created_at: dots_core::now(), updated_at: dots_core::now() };
         let policy = dots_core::ToolPolicy::default_for("d");
         let mems: Vec<dots_core::Memory> = (0..100).map(|i| dots_core::Memory { id: i.to_string(), dot_id: "d".into(), kind: MemoryKind::LongTerm, content: "x".repeat(200), importance: 0, source: None, created_at: dots_core::now(), updated_at: dots_core::now() }).collect();
-        let s = build_instructions(&dot, &policy, &[], &mems, Some("etapa 2"), true, None, 1, Some("Mapa do app: teste"));
+        let lesson = dots_core::Dismissal { id: "x".into(), team_id: Some("t".into()), team_name: "Mercado Livre".into(), manager_dot_id: Some("m".into()), manager_name: "Milei".into(), dot_id: Some("d".into()), dot_name: "Lula".into(), reason: "publicou anuncio sem revisar o preco".into(), lesson: "revisar o preco antes de publicar".into(), memories_wiped: 3, created_at: dots_core::now() };
+        let s = build_instructions(&dot, &policy, &[], Some("Mapa do app: teste"), &["flexi.exemplo.com".to_string()], &[lesson], None);
+        assert!(s.contains("NAO repita estes erros") && s.contains("revisar o preco antes de publicar") && s.contains("Milei"), "licoes de demissao entram nas instrucoes");
         assert!(s.contains("Mapa do app: teste"));
-        assert!(s.contains("\"QA\"") && s.contains("seja rigoroso") && s.contains("etapa 2") && s.contains("continuacao"));
-        assert!(s.len() < MAX_MEMORY_CHARS + 2000);
+        assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");
+        assert!(s.contains("NAO precisa de autorizacao previa do usuario") && s.contains("dots_browser_click"), "navegador sem pedir permissao antes, com as acoes");
+        assert!(s.contains("\"QA\"") && s.contains("seja rigoroso"));
+        assert!(!s.contains("Memorias relevantes") && !s.contains("continuacao"), "system prompt nao carrega nada que mude entre turnos");
+        assert!(s.len() < 6000);
+
+        let ctx = build_task_context(&mems, Some("etapa 2"), true, false, None, 1);
+        assert!(ctx.contains("etapa 2") && ctx.contains("continuacao") && ctx.contains("Memorias relevantes"));
+        assert!(ctx.len() < MAX_MEMORY_CHARS + 1000, "memorias continuam limitadas");
+        let reset = build_task_context(&[], None, false, true, None, 1);
+        assert!(reset.contains("sessao do motor foi reiniciada") && !reset.contains("continuacao da conversa"));
+        assert!(build_task_context(&[], None, false, false, None, 1).is_empty(), "primeira tarefa sem contexto extra nao ganha bloco vazio");
+    }
+
+    #[test]
+    fn session_rotates_only_when_completed_and_context_is_large() {
+        assert!(should_rotate_session(ExecutionStatus::Completed, Some(SESSION_ROTATE_CONTEXT_TOKENS)));
+        assert!(!should_rotate_session(ExecutionStatus::Completed, Some(SESSION_ROTATE_CONTEXT_TOKENS - 1)));
+        assert!(!should_rotate_session(ExecutionStatus::Completed, None), "motor sem medida de contexto nunca rotaciona");
+        assert!(!should_rotate_session(ExecutionStatus::Failed, Some(u64::MAX)), "falha segue o fluxo de retomada/limpeza ja existente");
     }
 }

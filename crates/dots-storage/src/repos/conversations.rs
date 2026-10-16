@@ -102,6 +102,12 @@ impl<'a> ConversationsRepo<'a> {
         self.get(id)
     }
 
+    /// Apaga todas as conversas (e mensagens, em cascata) do DOT. Devolve quantas conversas foram apagadas.
+    pub fn delete_for_dot(&mut self, dot_id: &str) -> DotsResult<u32> {
+        let n = self.conn.execute("DELETE FROM conversations WHERE dot_id = ?1", params![dot_id]).map_err(storage_err)?;
+        Ok(n as u32)
+    }
+
     pub fn delete(&mut self, id: &str) -> DotsResult<()> {
         let n = self.conn.execute("DELETE FROM conversations WHERE id = ?1", params![id]).map_err(storage_err)?;
         if n == 0 {

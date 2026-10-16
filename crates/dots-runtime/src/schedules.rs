@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use chrono::{Datelike, Local, TimeZone};
 use dots_core::automation::event_types as et;
-use dots_core::{DotsError, DotsResult, Schedule, ScheduleKind, TaskCreate, TaskKind, Timestamp};
+use dots_core::{DotsError, DotsResult, MessageRole, Schedule, ScheduleCreate, ScheduleKind, TaskCreate, TaskKind, Timestamp};
 use serde_json::json;
 
+use crate::policy::SharedContext;
 use crate::service::RuntimeService;
+use crate::tools::ToolOutput;
 
 /// Proxima ocorrencia apos `after` (horario local do usuario).
 pub fn next_run(kind: ScheduleKind, spec: &str, after: &Timestamp) -> DotsResult<Timestamp> {
@@ -115,6 +117,85 @@ pub async fn run(service: Arc<RuntimeService>) {
                 }
             }
         }
+    }
+}
+
+/// Limites dos agendamentos criados pelo proprio DOT (evitam um laco de tarefas).
+const DOT_MAX_SCHEDULES: usize = 10;
+const DOT_MIN_EVERY_MINUTES: i64 = 5;
+
+fn local_time(t: Option<Timestamp>) -> String {
+    t.map(|t| t.with_timezone(&Local).format("%d/%m %H:%M").to_string()).unwrap_or_else(|| "?".into())
+}
+
+/// Ferramentas `dots_schedule_*`: o DOT agenda o proprio trabalho (o que prometeu para depois) e avisa na conversa.
+impl RuntimeService {
+    /// Nota na conversa da tarefa em andamento (o usuario ve o que o DOT agendou ou cancelou).
+    async fn schedule_note(&self, ctx: &SharedContext, text: String, sch: &Schedule) {
+        let Ok(task) = self.storage.call({ let t = ctx.task_id.clone(); move |st| st.tasks().get(&t) }).await else { return };
+        let Some(cid) = task.conversation_id else { return };
+        let meta = json!({ "origin": format!("schedule:{}", sch.id), "prompt": sch.prompt.chars().take(4000).collect::<String>() });
+        let c = cid.clone();
+        if self.storage.call(move |st| st.conversations().add_message(&c, MessageRole::System, &text, None, None, meta)).await.is_ok() {
+            self.events.emit("message.changed", json!({ "conversation_id": cid, "dot_id": ctx.dot_id }));
+        }
+    }
+
+    pub async fn schedule_create_for_dot(&self, ctx: &SharedContext, kind: &str, spec: &str, prompt: &str) -> DotsResult<ToolOutput> {
+        let Ok(kind) = ScheduleKind::parse(kind.trim()) else {
+            return Ok(ToolOutput::err("kind invalido: use every, daily, weekly ou cron".into()));
+        };
+        let (spec, prompt) = (spec.trim().to_string(), prompt.trim().to_string());
+        if prompt.is_empty() {
+            return Ok(ToolOutput::err("informe o pedido (prompt) de cada disparo".into()));
+        }
+        if kind == ScheduleKind::Every && spec.parse::<i64>().is_ok_and(|m| m < DOT_MIN_EVERY_MINUTES) {
+            return Ok(ToolOutput::err(format!("intervalo minimo para agendamento do DOT: {DOT_MIN_EVERY_MINUTES} minutos")));
+        }
+        let next = match next_run(kind, &spec, &dots_core::now()) {
+            Ok(n) => n,
+            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+        };
+        let existing = self.storage.call({ let d = ctx.dot_id.clone(); move |st| st.schedules().list(Some(&d)) }).await?;
+        if let Some(same) = existing.iter().find(|x| x.enabled && x.kind == kind && x.spec == spec && x.prompt == prompt) {
+            return Ok(ToolOutput::ok(format!("este agendamento ja existe ({}): {}; proximo disparo {}", same.id, describe(same), local_time(same.next_run_at))));
+        }
+        if existing.iter().filter(|x| x.enabled).count() >= DOT_MAX_SCHEDULES {
+            return Ok(ToolOutput::err(format!("limite de {DOT_MAX_SCHEDULES} agendamentos ativos: cancele um com dots_schedule_cancel (veja dots_schedule_list)")));
+        }
+        let input = ScheduleCreate { dot_id: ctx.dot_id.clone(), kind, spec, prompt };
+        let sch = self.storage.call(move |st| st.schedules().create(input, Some(&next))).await?;
+        self.audit("schedule.create", "dot", Some(&sch.dot_id), json!({ "id": sch.id, "kind": sch.kind.as_str(), "spec": sch.spec, "by": "dot", "task_id": ctx.task_id })).await?;
+        self.schedules_notify.notify_one();
+        self.events.emit("automation.changed", json!({ "dot_id": sch.dot_id }));
+        self.schedule_note(ctx, format!("{} agendou: {} (próximo: {})", ctx.dot_name, describe(&sch), local_time(sch.next_run_at)), &sch).await;
+        Ok(ToolOutput::ok(format!("agendado ({}): {}; proximo disparo {}. O usuario ve e pode apagar no seu perfil; para cancelar use dots_schedule_cancel.", sch.id, describe(&sch), local_time(sch.next_run_at))))
+    }
+
+    pub async fn schedule_list_for_dot(&self, ctx: &SharedContext) -> DotsResult<ToolOutput> {
+        let list = self.storage.call({ let d = ctx.dot_id.clone(); move |st| st.schedules().list(Some(&d)) }).await?;
+        if list.is_empty() {
+            return Ok(ToolOutput::ok("nenhum agendamento".into()));
+        }
+        Ok(ToolOutput::ok(
+            list.iter()
+                .map(|x| format!("- {} | {} | {} | proximo: {} | pedido: {}", x.id, describe(x), if x.enabled { "ativo" } else { "desligado pelo usuario" }, local_time(x.next_run_at), x.prompt.chars().take(200).collect::<String>()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ))
+    }
+
+    pub async fn schedule_cancel_for_dot(&self, ctx: &SharedContext, id: &str) -> DotsResult<ToolOutput> {
+        let sch = match self.storage.call({ let id = id.trim().to_string(); move |st| st.schedules().get(&id) }).await {
+            Ok(s) if s.dot_id == ctx.dot_id => s,
+            _ => return Ok(ToolOutput::err(format!("agendamento '{id}' nao encontrado entre os seus (veja dots_schedule_list)"))),
+        };
+        self.storage.call({ let id = sch.id.clone(); move |st| st.schedules().delete(&id) }).await?;
+        self.audit("schedule.delete", "dot", Some(&sch.dot_id), json!({ "id": sch.id, "by": "dot", "task_id": ctx.task_id })).await?;
+        self.schedules_notify.notify_one();
+        self.events.emit("automation.changed", json!({ "dot_id": sch.dot_id }));
+        self.schedule_note(ctx, format!("{} cancelou o agendamento: {}", ctx.dot_name, describe(&sch)), &sch).await;
+        Ok(ToolOutput::ok(format!("agendamento cancelado: {}", describe(&sch))))
     }
 }
 

@@ -40,6 +40,8 @@ pub struct RuntimeService {
     pub event_depths: std::sync::Mutex<std::collections::HashMap<String, u32>>,
     pub flexi: crate::flexi::FlexiRegistry,
     pub browsers: crate::browser::BrowserPool,
+    pub usage: crate::usage::UsageCache,
+    pub cli_updates: crate::cli_updates::UpdatesCache,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +81,17 @@ struct IntegrationParams {
 #[derive(Deserialize)]
 struct TokenParams {
     token: String,
+}
+
+#[derive(Deserialize, Default)]
+struct ForceParams {
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Deserialize)]
+struct KindParams {
+    kind: EngineKind,
 }
 
 #[derive(Deserialize)]
@@ -152,6 +165,17 @@ struct ConvSendParams {
     content: String,
     #[serde(default)]
     attachments: Vec<String>,
+}
+
+/// Anexo da conversa: um arquivo do computador (`path`) ou bytes colados (`data`, base64).
+#[derive(Deserialize)]
+struct ConvAttachParams {
+    conversation_id: String,
+    name: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -591,14 +615,15 @@ impl RuntimeService {
                 Ok(json!({ "paused": paused }))
             }
             "contacts.list" => {
-                let contacts = self.storage.call(|s| {
+                let role_names = self.flexi_role_names();
+                let contacts = self.storage.call(move |s| {
                     let dots = s.dots().list(false)?;
                     let active = s.tasks().list(&TaskFilter { status: Some(vec![TaskStatus::Queued, TaskStatus::Running, TaskStatus::WaitingApproval, TaskStatus::WaitingUser]), limit: 1000, ..Default::default() })?;
                     let pending = s.approvals().list(true, 500)?;
-                    // Perguntas feitas em pedido delegado vao ao gerente: nao sao pedidos ao usuario.
+                    // Perguntas e pedidos de permissao feitos em pedido delegado vao ao gerente: nao sao pedidos ao usuario.
                     let routed: std::collections::HashSet<String> = pending
                         .iter()
-                        .filter(|a| a.kind == dots_core::ApprovalKind::Question && s.delegations().by_child(&a.task_id).ok().flatten().is_some())
+                        .filter(|a| s.delegations().by_child(&a.task_id).ok().flatten().is_some())
                         .map(|a| a.id.clone())
                         .collect();
                     let mut out = vec![];
@@ -606,11 +631,12 @@ impl RuntimeService {
                         let conv = s.conversations().main(&dot.id)?;
                         let mine: Vec<&dots_core::Task> = active.iter().filter(|t| t.dot_id == dot.id).collect();
                         let reqs = pending.iter().filter(|a| a.dot_id == dot.id && !routed.contains(&a.id)).count() as u32;
-                        let asked_manager = pending.iter().any(|a| a.dot_id == dot.id && routed.contains(&a.id));
+                        let asked_manager = pending.iter().find(|a| a.dot_id == dot.id && routed.contains(&a.id)).map(|a| a.kind == dots_core::ApprovalKind::Question);
+                        let last_failed = s.tasks().list(&TaskFilter { dot_id: Some(dot.id.clone()), limit: 1, ..Default::default() })?.first().map(|t| t.status == TaskStatus::Failed).unwrap_or(false);
                         let (state, text) = if reqs > 0 {
                             ("attention", if pending.iter().any(|a| a.dot_id == dot.id && !routed.contains(&a.id) && a.kind == dots_core::ApprovalKind::Question) { "Fez uma pergunta" } else { "Pede sua permissao" }.to_string())
-                        } else if asked_manager {
-                            ("busy", "Perguntou ao gerente".to_string())
+                        } else if let Some(is_question) = asked_manager {
+                            ("busy", if is_question { "Perguntou ao gerente" } else { "Pediu permissao ao gerente" }.to_string())
                         } else if let Some(t) = mine.iter().find(|t| t.status == TaskStatus::WaitingUser) {
                             ("attention", format!("Precisa de voce: {}", t.title))
                         } else if let Some(t) = mine.iter().find(|t| t.status == TaskStatus::Running) {
@@ -622,11 +648,25 @@ impl RuntimeService {
                         } else {
                             ("idle", "Livre".to_string())
                         };
-                        let title = s.apps().integration(&dot.id, crate::flexi::KIND)?
-                            .and_then(|i| i.role_template)
-                            .and_then(|t| crate::flexi_team::template_name(&t))
-                            .map(str::to_string);
-                        out.push(dots_core::Contact { conversation_id: conv.id, last_message: conv.last_message, last_role: conv.last_role, last_at: conv.updated_at, state: state.into(), state_text: text, pending_requests: reqs, title, dot });
+                        // Sem papel de origem, o cargo de um funcionario de equipe e a funcao dele (a que o gerente definiu ao contratar).
+                        let title = match s.apps().integration(&dot.id, crate::flexi::KIND)?.and_then(|i| i.role_template).and_then(|t| role_names.get(&t).cloned()) {
+                            Some(t) => Some(t),
+                            None if !dot.description.trim().is_empty() && s.teams().member_of(&dot.id)?.is_some() => Some(dot.description.trim().to_string()),
+                            None => None,
+                        };
+                        // Batimento (como no ovrgit): trabalhando = firme; esperando alguem = lento; na fila = em espera; falhou = linha reta.
+                        let pulse = if reqs > 0 || asked_manager.is_some() || mine.iter().any(|t| t.status == TaskStatus::WaitingUser || t.status == TaskStatus::WaitingApproval) {
+                            "waiting"
+                        } else if mine.iter().any(|t| t.status == TaskStatus::Running) {
+                            "live"
+                        } else if !mine.is_empty() {
+                            "standby"
+                        } else if dot.status == DotStatus::Active && last_failed {
+                            "error"
+                        } else {
+                            "idle"
+                        };
+                        out.push(dots_core::Contact { conversation_id: conv.id, last_message: conv.last_message, last_role: conv.last_role, last_at: conv.updated_at, state: state.into(), state_text: text, pending_requests: reqs, title, pulse: pulse.into(), dot });
                     }
                     out.sort_by(|a, b| b.last_at.cmp(&a.last_at));
                     Ok(out)
@@ -665,7 +705,8 @@ impl RuntimeService {
             "conversations.send" => {
                 let ConvSendParams { conversation_id, content, attachments } = p(params)?;
                 let conv = self.storage.call({ let c = conversation_id.clone(); move |s| s.conversations().get(&c) }).await?;
-                let msg = self.storage.call({ let (c, t) = (conversation_id.clone(), content.clone()); move |s| s.conversations().add_message(&c, MessageRole::User, &t, None, None, json!({})) }).await?;
+                let meta = if attachments.is_empty() { json!({}) } else { json!({ "attachments": attachments }) };
+                let msg = self.storage.call({ let (c, t) = (conversation_id.clone(), content.clone()); move |s| s.conversations().add_message(&c, MessageRole::User, &t, None, None, meta) }).await?;
                 if conv.message_count == 0 {
                     let (c, title) = (conversation_id.clone(), content.chars().take(60).collect::<String>());
                     let _ = self.storage.call(move |s| s.conversations().set_title(&c, &title)).await;
@@ -676,6 +717,14 @@ impl RuntimeService {
                 self.events.emit("message.changed", json!({ "conversation_id": conversation_id, "message_id": msg.id }));
                 let _ = self.emit_event(et::USER_MESSAGE, "user", json!({ "dot_id": conv.dot_id, "conversation_id": conversation_id, "task_id": task.id, "message_id": msg.id }), None, Some(format!("msg:{}", msg.id)), 0).await;
                 Ok(json!({ "message": msg, "task": task }))
+            }
+            "conversations.attach" => {
+                let ConvAttachParams { conversation_id, name, path, data } = p(params)?;
+                let conv = self.storage.call({ let c = conversation_id.clone(); move |s| s.conversations().get(&c) }).await?;
+                let (dot, dirs) = self.storage.call({ let d = conv.dot_id.clone(); move |s| Ok((s.dots().get(&d)?, s.dots().workspaces(&d)?)) }).await?;
+                let workspace = PathBuf::from(dot.workspace_path.ok_or_else(|| DotsError::Validation("o DOT nao tem workspace".into()))?);
+                let readable: Vec<PathBuf> = std::iter::once(workspace.clone()).chain(dirs.into_iter().filter(|w| w.can_read).map(|w| PathBuf::from(w.path))).collect();
+                Ok(save_attachment(&workspace, &readable, &name, path.as_deref(), data.as_deref())?)
             }
             "approvals.list" => {
                 let ApprovalListParams { pending_only, limit } = p(params).unwrap_or_default();
@@ -736,6 +785,18 @@ impl RuntimeService {
                 self.audit("policy.update", "dot", Some(&dot_id), json!(pol)).await?;
                 self.events.emit("dots.changed", json!({ "id": dot_id, "action": "policy" }));
                 Ok(json!(pol))
+            }
+            "policies.learned" => {
+                let DotIdParams { dot_id } = p(params)?;
+                let dot_id = dot_id.ok_or_else(|| DotsError::Validation("dot_id obrigatorio".into()))?;
+                Ok(json!(self.storage.call(move |s| s.learned().list(&dot_id)).await?))
+            }
+            "policies.forget" => {
+                let IdParams { id } = p(params)?;
+                let dot = self.storage.call({ let id = id.clone(); move |s| s.learned().forget(&id) }).await?;
+                self.audit("policy.forget_learned", "dot", dot.as_deref(), json!({ "id": id })).await?;
+                self.events.emit("learned.changed", json!({ "dot_id": dot }));
+                Ok(json!({ "ok": true }))
             }
             "workspaces.add" => {
                 let WorkspaceParams { dot_id, path, can_read, can_write } = p(params)?;
@@ -802,7 +863,24 @@ impl RuntimeService {
                 self.flexi_remove(&id).await?;
                 Ok(json!({ "ok": true }))
             }
-            "apps.flexi.templates" => Ok(json!(crate::flexi_team::templates())),
+            "apps.flexi.browser_start" => {
+                let base_url = params.get("base_url").and_then(|v| v.as_str()).map(String::from);
+                self.flexi_browser_login_start(base_url).await
+            }
+            "apps.flexi.browser_poll" => {
+                let token = params.get("token").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                self.flexi_browser_login_poll(&token).await
+            }
+            "apps.flexi.browser_cancel" => {
+                let token = params.get("token").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                self.flexi_browser_login_cancel(&token).await;
+                Ok(json!({ "ok": true }))
+            }
+            "apps.flexi.photo" => {
+                let IdParams { id } = p(params)?;
+                self.flexi_profile_photo(&id).await
+            }
+            "apps.flexi.templates" => Ok(json!(self.flexi_templates(None).await)),
             "apps.flexi.create_team" => {
                 let IdParams { id } = p(params)?;
                 Ok(self.flexi_create_team(&id).await?)
@@ -820,6 +898,32 @@ impl RuntimeService {
             }
             m if m.starts_with("teams.") || m == "dots.team" => {
                 self.handle_teams(m, params).await?.ok_or_else(|| DotsError::NotFound(format!("metodo {m}")))
+            }
+            m if m.starts_with("dismissals.") => {
+                self.handle_dismissals(m, params).await?.ok_or_else(|| DotsError::NotFound(format!("metodo {m}")))
+            }
+            m if m.starts_with("group.") => {
+                self.handle_group(m, params).await?.ok_or_else(|| DotsError::NotFound(format!("metodo {m}")))
+            }
+            "usage.get" => {
+                let ForceParams { force } = p(params).unwrap_or_default();
+                Ok(json!(self.usage(force).await))
+            }
+            "cli.updates" => {
+                let ForceParams { force } = p(params).unwrap_or_default();
+                Ok(json!(self.cli_updates(force).await))
+            }
+            "cli.update" => {
+                let KindParams { kind } = p(params)?;
+                let after = self.cli_update(kind).await?;
+                self.audit("cli.update", "engine", Some(kind.as_str()), json!({ "version": after.as_ref().map(|a| a.current.clone()) })).await?;
+                Ok(json!(after))
+            }
+            "cli.install" => {
+                let KindParams { kind } = p(params)?;
+                let after = self.cli_install(kind).await?;
+                self.audit("cli.install", "engine", Some(kind.as_str()), json!({ "version": after.as_ref().map(|a| a.current.clone()) })).await?;
+                Ok(json!(after))
             }
             "apps.flexi.assign_role" => {
                 let AssignRoleParams { dot_id, connection_id, template_id, group, role } = p(params)?;
@@ -968,5 +1072,88 @@ impl RuntimeService {
         self.storage
             .call(move |s| s.audit().record("user", &action, &entity, entity_id.as_deref(), details).map(|_| ()))
             .await
+    }
+}
+
+/// Tamanho maximo de um anexo da conversa.
+const MAX_ATTACHMENT_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Guarda um anexo da conversa onde o DOT pode ler. Arquivo que ja esta numa pasta legivel do DOT fica onde esta;
+/// os demais (arrastados de fora, colados) sao copiados para `<workspace>/anexos/`.
+fn save_attachment(workspace: &std::path::Path, readable: &[PathBuf], name: &str, path: Option<&str>, data: Option<&str>) -> DotsResult<Value> {
+    use base64::Engine as _;
+    // So o nome do arquivo, sem caracteres estranhos; nomes longos perdem o comeco (a extensao fica).
+    let chars: Vec<char> = std::path::Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') { c } else { '_' })
+        .collect();
+    let clean: String = chars[chars.len().saturating_sub(100)..].iter().collect::<String>().trim().to_string();
+    let clean = if clean.is_empty() || clean.starts_with('.') { format!("anexo{clean}") } else { clean };
+    let bytes = match (path, data) {
+        (Some(src), _) => {
+            let src = std::fs::canonicalize(src).map_err(|e| DotsError::Validation(format!("arquivo {src}: {e}")))?;
+            let meta = std::fs::metadata(&src)?;
+            if !meta.is_file() {
+                return Err(DotsError::Validation(format!("{} nao e um arquivo", src.display())));
+            }
+            let inside = readable.iter().any(|d| std::fs::canonicalize(d).map(|d| src.starts_with(d)).unwrap_or(false));
+            if inside && !src.components().any(|c| c.as_os_str() == ".dots") {
+                return Ok(json!({ "path": src.to_string_lossy(), "name": clean, "size": meta.len() }));
+            }
+            if meta.len() > MAX_ATTACHMENT_BYTES {
+                return Err(DotsError::Validation("anexo maior que 50 MB".into()));
+            }
+            std::fs::read(&src)?
+        }
+        (None, Some(b64)) => base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| DotsError::Validation(format!("anexo invalido: {e}")))?,
+        (None, None) => return Err(DotsError::Validation("informe path ou data".into())),
+    };
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        return Err(DotsError::Validation("anexo maior que 50 MB".into()));
+    }
+    let dir = workspace.join("anexos");
+    std::fs::create_dir_all(&dir)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let mut dest = dir.join(format!("{stamp}-{clean}"));
+    let mut n = 2;
+    while dest.exists() {
+        dest = dir.join(format!("{stamp}-{n}-{clean}"));
+        n += 1;
+    }
+    std::fs::write(&dest, &bytes)?;
+    Ok(json!({ "path": dest.to_string_lossy(), "name": clean, "size": bytes.len() }))
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn pasted_bytes_go_to_workspace_anexos() {
+        let ws = tempfile::tempdir().unwrap();
+        let v = save_attachment(ws.path(), &[ws.path().to_path_buf()], "../../etc/print tela?.png", None, Some("aGVsbG8=")).unwrap();
+        let p = PathBuf::from(v["path"].as_str().unwrap());
+        assert!(p.starts_with(ws.path().join("anexos")), "{p:?}");
+        assert!(p.file_name().unwrap().to_string_lossy().ends_with("-print tela_.png"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn readable_file_stays_and_outside_file_is_copied() {
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inner = ws.path().join("nota.txt");
+        std::fs::write(&inner, "a").unwrap();
+        let v = save_attachment(ws.path(), &[ws.path().to_path_buf()], "nota.txt", Some(inner.to_str().unwrap()), None).unwrap();
+        assert_eq!(PathBuf::from(v["path"].as_str().unwrap()), std::fs::canonicalize(&inner).unwrap());
+        let ext = outside.path().join("fora.pdf");
+        std::fs::write(&ext, "pdf").unwrap();
+        let v = save_attachment(ws.path(), &[ws.path().to_path_buf()], "fora.pdf", Some(ext.to_str().unwrap()), None).unwrap();
+        let p = PathBuf::from(v["path"].as_str().unwrap());
+        assert!(p.starts_with(ws.path().join("anexos")) && p.exists());
+        assert!(save_attachment(ws.path(), &[], "x", Some(outside.path().to_str().unwrap()), None).is_err(), "pasta nao e arquivo");
     }
 }

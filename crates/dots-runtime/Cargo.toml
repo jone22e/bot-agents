@@ -28,11 +28,12 @@ uuid.workspace = true
 chrono.workspace = true
 rand.workspace = true
 hex.workspace = true
+base64.workspace = true
 croner = "4.0.1"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 sha2.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-reqwest.workspace = true

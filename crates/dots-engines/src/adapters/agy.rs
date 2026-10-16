@@ -62,7 +62,7 @@ impl AgentEngine for AgyAdapter {
                 let mut out = vec![];
                 if let Some(u) = s.get("usage") {
                     st.usage = u.clone();
-                    out.push(ExecutionEvent::Usage { input_tokens: u.get("input_tokens").and_then(|x| x.as_u64()), output_tokens: u.get("output_tokens").and_then(|x| x.as_u64()), cost_usd: None });
+                    out.push(ExecutionEvent::Usage { input_tokens: u.get("input_tokens").and_then(|x| x.as_u64()), output_tokens: u.get("output_tokens").and_then(|x| x.as_u64()), cost_usd: None, context_tokens: None });
                 }
                 if step_type == "tool" {
                     let info = s.get("tool_info").cloned().unwrap_or(Value::Null);

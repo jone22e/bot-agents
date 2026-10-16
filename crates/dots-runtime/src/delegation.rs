@@ -15,7 +15,8 @@ impl RuntimeService {
         if request.is_empty() {
             return Ok(ToolOutput::err("o pedido da delegacao esta vazio".into()));
         }
-        let policy = ctx.policy.clone();
+        // Politica atual (nao a do inicio da execucao): quem o gerente contratou nesta tarefa ja pode receber pedidos.
+        let policy = self.storage.call({ let d = ctx.dot_id.clone(); move |st| st.policies().get(&d) }).await?;
         if policy.can_delegate_to.is_empty() {
             return Ok(ToolOutput::err("este DOT nao tem permissao para delegar (configure a equipe em Permissoes)".into()));
         }
@@ -86,7 +87,55 @@ impl RuntimeService {
         if list.is_empty() {
             return Ok(ToolOutput::ok("nenhuma delegacao nesta tarefa".into()));
         }
-        Ok(ToolOutput::ok(list.iter().map(|d| format!("- {} -> {}: {} {}", d.id, d.to_dot_name, d.status.as_str(), d.result.as_deref().map(|r| format!("| {}", r.chars().take(300).collect::<String>())).unwrap_or_default())).collect::<Vec<_>>().join("\n")))
+        let mut lines = vec![];
+        for d in &list {
+            let child = match &d.child_task_id {
+                Some(c) => self.storage.call({ let c = c.clone(); move |st| st.tasks().get(&c) }).await.ok(),
+                None => None,
+            };
+            // Estado real do funcionario: a delegacao diz "pending" enquanto a tarefa dele pode estar na fila, rodando ou parada.
+            let worker = match child.as_ref().filter(|_| !d.status.is_terminal()) {
+                Some(t) => match t.status {
+                    TaskStatus::Queued => " | funcionario na fila".to_string(),
+                    TaskStatus::Running => " | funcionario trabalhando".to_string(),
+                    TaskStatus::WaitingApproval => " | funcionario aguardando permissao do usuario".to_string(),
+                    TaskStatus::WaitingUser | TaskStatus::Failed => format!(" | FUNCIONARIO PARADO ({}): {}. Retome com dots_resume_delegation ou delegue de novo com instrucoes melhores.", t.status.as_str(), t.error.as_deref().unwrap_or("sem detalhe")),
+                    TaskStatus::Completed if self.has_pending_question(&t.id).await => " | funcionario aguarda a resposta de uma pergunta (dots_answer_question)".to_string(),
+                    other => format!(" | tarefa do funcionario: {}", other.as_str()),
+                },
+                None => String::new(),
+            };
+            lines.push(format!("- {} -> {}: {}{}{}", d.id, d.to_dot_name, d.status.as_str(), d.result.as_deref().map(|r| format!(" | {}", r.chars().take(300).collect::<String>())).unwrap_or_default(), worker));
+        }
+        Ok(ToolOutput::ok(lines.join("\n")))
+    }
+
+    /// `dots_resume_delegation`: o gerente recoloca na fila a tarefa de um funcionario que parou (interrompida ou com falha).
+    pub async fn resume_delegation(&self, ctx: &SharedContext, id: &str) -> DotsResult<ToolOutput> {
+        let d = match self.storage.call({ let i = id.trim().to_string(); move |st| st.delegations().get(&i) }).await {
+            Ok(d) => d,
+            Err(_) => return Ok(ToolOutput::err(format!("delegacao '{id}' nao encontrada"))),
+        };
+        if d.from_dot_id != ctx.dot_id {
+            return Ok(ToolOutput::err("esta delegacao nao foi feita por voce".into()));
+        }
+        let Some(child_id) = d.child_task_id.clone() else {
+            return Ok(ToolOutput::err("esta delegacao nao tem tarefa para retomar".into()));
+        };
+        let child = self.storage.call({ let c = child_id.clone(); move |st| st.tasks().get(&c) }).await?;
+        if !matches!(child.status, TaskStatus::WaitingUser | TaskStatus::Failed | TaskStatus::Cancelled) {
+            return Ok(ToolOutput::err(format!("a tarefa de {} esta {}; so e possivel retomar tarefas paradas, com falha ou canceladas", d.to_dot_name, child.status.as_str())));
+        }
+        let (did, cid) = (d.id.clone(), child_id.clone());
+        self.storage.call(move |st| {
+            st.tasks().requeue(&cid)?;
+            st.delegations().set_status(&did, DelegationStatus::Pending, None)?;
+            Ok(())
+        }).await?;
+        self.events.emit("task.changed", json!({ "id": child_id, "dot_id": d.to_dot_id, "status": "QUEUED" }));
+        self.events.emit("delegation.changed", json!({ "id": d.id, "status": "pending" }));
+        self.scheduler_notify.notify_one();
+        Ok(ToolOutput::ok(format!("Tarefa de {} voltou a fila (delegacao {}). O resultado chega a voce quando ele terminar.", d.to_dot_name, d.id)))
     }
 
     pub async fn cancel_delegation(&self, ctx: &SharedContext, id: &str) -> DotsResult<ToolOutput> {
@@ -104,8 +153,8 @@ impl RuntimeService {
     }
 
     pub async fn list_team(&self, ctx: &SharedContext) -> DotsResult<ToolOutput> {
-        let allowed = ctx.policy.can_delegate_to.clone();
         let me = ctx.dot_id.clone();
+        let allowed = self.storage.call({ let d = me.clone(); move |st| st.policies().get(&d) }).await?.can_delegate_to;
         let dots = self.storage.call(move |st| {
             let all = st.dots().list(false)?;
             let mut out = vec![];
@@ -118,7 +167,7 @@ impl RuntimeService {
             Ok(out)
         }).await?;
         if dots.is_empty() {
-            return Ok(ToolOutput::ok("nenhum DOT disponivel para delegacao".into()));
+            return Ok(ToolOutput::ok("nenhum DOT disponivel para delegacao. Se voce e gerente, contrate um funcionario com dots_hire_employee e delegue a ele.".into()));
         }
         Ok(ToolOutput::ok(dots.iter().map(|(d, running)| format!("- {} (id {}): {} | assistente: {} | {}", d.name, d.id, if d.objective.is_empty() { d.description.clone() } else { d.objective.clone() }, d.primary_engine.map(|e| e.as_str()).unwrap_or("nenhum"), if *running > 0 { format!("{running} trabalho(s) em andamento") } else { "livre".into() })).collect::<Vec<_>>().join("\n")))
     }
@@ -190,15 +239,54 @@ impl RuntimeService {
             Some(d) if d.from_dot_id == ctx.dot_id => {}
             _ => return Ok(ToolOutput::err("esta pergunta nao e de um funcionario em pedido delegado por voce".into())),
         }
-        let (q2, ans2) = (qid.clone(), answer.clone());
-        let approval = self.storage.call(move |st| st.approvals().resolve(&q2, true, Some(&ans2))).await?;
-        self.registry.resolve_approval(&qid, true);
-        self.events.emit("approval.resolved", json!(approval));
-        let _ = self.emit_event(et::APPROVAL_GRANTED, &format!("dot:{}", ctx.dot_id), json!({ "approval_id": qid, "dot_id": approval.dot_id, "dot_name": approval.dot_name, "task_id": approval.task_id, "tool": approval.tool, "kind": approval.kind.as_str(), "answered_by": ctx.dot_id }), None, Some(format!("approval:{qid}:granted")), 0).await;
-        let (actor, q3, ans3) = (format!("dot:{}", ctx.dot_id), qid.clone(), answer.clone());
-        let _ = self.storage.call(move |st| st.audit().record(&actor, "approval.approve", "approval", Some(&q3), json!({ "reason": ans3 })).map(|_| ())).await;
-        self.continue_after_question(&approval, &format!("seu gerente {}", ctx.dot_name)).await;
+        let approval = self.decide_approval_by(&qid, true, Some(answer), &format!("dot:{}", ctx.dot_id), &format!("seu gerente {}", ctx.dot_name)).await?;
         Ok(ToolOutput::ok(format!("Resposta enviada a {}. Ele continua o trabalho e o resultado chega a voce quando terminar.", approval.dot_name)))
+    }
+
+    /// Pedido de permissao de um funcionario em pedido delegado: vira uma tarefa para quem delegou decidir.
+    /// Devolve `true` se foi encaminhado.
+    pub async fn route_approval_to_manager(&self, ctx: &SharedContext, approval: &dots_core::Approval) -> bool {
+        let tid = ctx.task_id.clone();
+        let Ok(Some(d)) = self.storage.call(move |st| st.delegations().by_child(&tid)).await else { return false };
+        let Ok(parent) = self.storage.call({ let p = d.parent_task_id.clone(); move |st| st.tasks().get(&p) }).await else { return false };
+        let prompt = format!(
+            "Seu funcionario {} pede permissao para uma acao no pedido que voce delegou (delegacao {}).\nPedido: {}\nAcao: {}\nO que ele quer fazer: {}\nRisco: {}\nRecursos: {}\n\nDecida com dots_decide_approval(approval_id=\"{}\", approved=true ou false, reason=\"...\"). Aprove o que esta dentro do pedido que voce fez e do que o usuario ja autorizou. Para acoes irreversiveis (publicar, excluir, finalizar, gastar dinheiro) que o usuario nao autorizou explicitamente, pergunte a ele antes com dots_ask_user e decida quando tiver a resposta. Aprovada uma vez, ele nao pede de novo para este tipo de acao. Ele esta parado esperando a sua decisao.",
+            d.to_dot_name, d.id, d.request.chars().take(300).collect::<String>(), approval.tool, approval.summary, approval.risk.as_str(),
+            if approval.resources.is_empty() { "-".to_string() } else { approval.resources.join(", ") }, approval.id
+        );
+        let input = TaskCreate {
+            dot_id: d.from_dot_id.clone(),
+            prompt,
+            title: Some(format!("Permissao para {}: {}", d.to_dot_name, approval.summary.chars().take(60).collect::<String>())),
+            kind: Some(parent.kind),
+            conversation_id: parent.conversation_id.clone(),
+            origin: Some(format!("approval:{}", approval.id)),
+            correlation_id: parent.correlation_id.clone().or(Some(parent.id.clone())),
+            delegation_chain: parent.delegation_chain.clone(),
+            parent_task_id: parent.parent_task_id.clone(),
+            ..Default::default()
+        };
+        self.create_task(input).await.is_ok()
+    }
+
+    /// `dots_decide_approval`: o gerente decide o pedido de permissao de um funcionario em pedido delegado por ele.
+    pub async fn decide_approval_as_manager(&self, ctx: &SharedContext, approval_id: &str, approved: bool, reason: Option<&str>) -> DotsResult<ToolOutput> {
+        let aid = approval_id.trim().to_string();
+        let Ok(a) = self.storage.call({ let i = aid.clone(); move |st| st.approvals().get(&i) }).await else {
+            return Ok(ToolOutput::err(format!("pedido de permissao '{aid}' nao encontrado")));
+        };
+        if a.kind == ApprovalKind::Question {
+            return Ok(ToolOutput::err("isto e uma pergunta: responda com dots_answer_question".into()));
+        }
+        if a.status != ApprovalStatus::Pending {
+            return Ok(ToolOutput::err(format!("este pedido ja foi decidido ({})", a.status.as_str())));
+        }
+        match self.storage.call({ let t = a.task_id.clone(); move |st| st.delegations().by_child(&t) }).await? {
+            Some(d) if d.from_dot_id == ctx.dot_id => {}
+            _ => return Ok(ToolOutput::err("este pedido nao e de um funcionario em pedido delegado por voce".into())),
+        }
+        let approval = self.decide_approval_by(&aid, approved, reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()), &format!("dot:{}", ctx.dot_id), &format!("seu gerente {}", ctx.dot_name)).await?;
+        Ok(ToolOutput::ok(format!("{} para {}: {}. Ele continua o trabalho.", if approved { "Permissao concedida" } else { "Permissao negada" }, approval.dot_name, approval.summary)))
     }
 
     /// Ha pergunta pendente desta tarefa (encaminhada ao gerente ou ao usuario)?
@@ -250,7 +338,7 @@ impl RuntimeService {
         let input = TaskCreate {
             dot_id: parent.dot_id.clone(),
             prompt,
-            title: Some(format!("Continuacao: {}", parent.title)),
+            title: Some(format!("Continuacao: {}", parent.title.trim_start_matches("Continuacao: "))),
             kind: Some(parent.kind),
             conversation_id: parent.conversation_id.clone(),
             origin: Some(format!("followup:{}", parent.id)),
@@ -263,11 +351,6 @@ impl RuntimeService {
             Ok(t) => tracing::info!(parent = %parent.id, followup = %t.id, "continuacao criada apos delegacoes"),
             Err(e) => tracing::warn!(parent = %parent.id, error = %e, "falha ao criar continuacao"),
         }
-    }
-
-    /// Resposta do usuario a uma pergunta: cria a continuacao com a resposta.
-    pub async fn on_question_answered(&self, approval: &dots_core::Approval) {
-        self.continue_after_question(approval, "o usuario").await
     }
 
     /// Pergunta expirada sem resposta: o DOT continua sabendo disso (e a delegacao, se houver, pode fechar).
@@ -289,7 +372,7 @@ impl RuntimeService {
         let input = TaskCreate {
             dot_id: task.dot_id.clone(),
             prompt,
-            title: Some(format!("Continuacao: {}", task.title)),
+            title: Some(format!("Continuacao: {}", task.title.trim_start_matches("Continuacao: "))),
             kind: Some(task.kind),
             conversation_id: task.conversation_id.clone(),
             origin: Some(format!("followup:{}", task.id)),

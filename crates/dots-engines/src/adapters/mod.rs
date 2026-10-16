@@ -18,6 +18,8 @@ pub struct ParserState {
     pub stderr_tail: Vec<String>,
     pub usage: serde_json::Value,
     pub cost_usd: Option<f64>,
+    /// Tamanho do contexto na ultima chamada ao modelo (entrada + cache), quando o motor informa.
+    pub context_tokens: Option<u64>,
 }
 
 impl ParserState {

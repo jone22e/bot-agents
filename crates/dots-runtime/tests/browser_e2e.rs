@@ -135,6 +135,26 @@ async fn each_dot_gets_its_own_browser_profile() {
     let st = call(&client, "browser.status", json!({ "dot_id": a.id })).await;
     assert_eq!(st["watching"], false);
 
+    // Clicar em algo irreversivel ("Excluir ...") aguarda aprovacao mesmo no nivel exec; aprovado, o clique acontece.
+    let url2 = serve_html("<title>Acoes</title><button onclick=\"document.title='clicou'\">Excluir anuncio</button><a href='/x'>Mais</a>").await;
+    let task: Task = serde_json::from_value(call(&client, "tasks.create", json!({ "dot_id": a.id, "prompt": format!("CLICK:{url2}|button \"Excluir anuncio\"") })).await).unwrap();
+    let start = Instant::now();
+    let pending = loop {
+        let list: Vec<Approval> = serde_json::from_value(call(&client, "approvals.list", json!({ "pending_only": true })).await).unwrap();
+        if let Some(ap) = list.into_iter().find(|x| x.task_id == task.id) {
+            break ap;
+        }
+        assert!(start.elapsed() < Duration::from_secs(60), "o clique deveria pedir aprovacao");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(pending.tool, "dots_browser_click");
+    assert_eq!(pending.risk, RiskLevel::Critical);
+    assert!(pending.summary.starts_with("navegador: clicar em button \"Excluir anuncio\""), "{}", pending.summary);
+    call(&client, "approvals.decide", json!({ "id": pending.id, "approved": true })).await;
+    let done = wait_task(&client, &task.id, Duration::from_secs(60)).await;
+    let text = done.result_text.clone().unwrap_or_default();
+    assert!(text.starts_with("CLICOU Pagina: clicou"), "{text}");
+
     // DOT B: rede desabilitada -> negado pela politica, sem navegador e sem perfil.
     let b = mk("Navegador B").await;
     call(&client, "policies.set", json!({ "dot_id": b.id, "patch": { "auto_approve_level": "exec" } })).await;

@@ -12,7 +12,11 @@ struct Flexi {
 }
 impl Flexi {
     async fn start(mfa: bool) -> Self {
-        let port = 19000 + (std::process::id() % 900) as u16 + if mfa { 50 } else { 0 };
+        Self::start_at(mfa, if mfa { 50 } else { 0 }).await
+    }
+    /// Testes rodam em paralelo: cada um usa um deslocamento de porta proprio.
+    async fn start_at(mfa: bool, offset: u16) -> Self {
+        let port = 19000 + (std::process::id() % 900) as u16 + offset;
         let mut args = vec![concat!(env!("CARGO_MANIFEST_DIR"), "/../dots-flexi/tests/fixtures/fake_flexi.py").to_string(), port.to_string()];
         if mfa { args.push("--mfa".into()); }
         let child = Command::new("python3").arg("-I").args(&args).stdout(Stdio::null()).stderr(Stdio::inherit()).spawn().unwrap();
@@ -89,9 +93,9 @@ async fn connect_bind_and_use_flexi_tools_with_approval_and_session_renewal() {
 
     // Equipes: gerente delega aos funcionarios; equipes se encaixam; papel e politica ficam em sincronia
     let creator = rt.dot("Criador ML", "read").await;
-    rt.call("apps.flexi.assign_role", json!({ "dot_id": creator.id, "connection_id": c.id, "template_id": "ml_creator" })).await;
+    rt.call("apps.flexi.assign_role", json!({ "dot_id": creator.id, "connection_id": c.id, "group": "mercadolivre", "role": "worker" })).await;
     let integ: DotIntegration = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": creator.id, "kind": "flexi" })).await).unwrap();
-    assert_eq!((integ.role_template.as_deref(), integ.work_group.as_deref()), (Some("ml_creator"), Some("mercadolivre")));
+    assert_eq!((integ.role_template.as_deref(), integ.work_group.as_deref()), (None, Some("mercadolivre")));
     let sub = rt.dot("Sub ML", "read").await;
     let ml: Team = serde_json::from_value(rt.call("teams.create", json!({ "name": "Mercado Livre", "manager_dot_id": sub.id, "member_ids": [creator.id] })).await).unwrap();
     let pol: ToolPolicy = serde_json::from_value(rt.call("policies.get", json!({ "dot_id": sub.id })).await).unwrap();
@@ -178,27 +182,98 @@ async fn mfa_connect_and_team_creation() {
     let c: AppConnection = serde_json::from_value(rt.call("apps.flexi.mfa", json!({ "id": c.id, "code": "123456" })).await).unwrap();
     assert_eq!(c.status, ConnectionStatus::Connected);
     assert_eq!(c.user_id, Some(7));
-    // modelos e equipe
+    // Flexi sem a rota de especialidades: os 3 gerentes embutidos, cada um com a equipe do seu setor (sem funcionarios:
+    // o gerente contrata).
     let tpl: Vec<Value> = serde_json::from_value(rt.call("apps.flexi.templates", json!({})).await).unwrap();
-    assert!(tpl.iter().any(|t| t["name"] == "Gerente de Marketplaces"));
+    assert!(tpl.iter().all(|t| t["role"] == "supervisor"));
     let r = rt.call("apps.flexi.create_team", json!({ "id": c.id })).await;
-    assert_eq!(r["created"].as_array().unwrap().len(), 11);
+    assert_eq!(r["created"].as_array().unwrap().len(), 3);
     let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
-    let manager = dots.iter().find(|d| d.name == "Gerente de Marketplaces").unwrap();
+    let manager = dots.iter().find(|d| d.name == "SubGerente de Mercado Livre").unwrap();
     assert_eq!(manager.role, DotRole::Supervisor);
-    let pol: ToolPolicy = serde_json::from_value(rt.call("policies.get", json!({ "dot_id": manager.id })).await).unwrap();
-    assert_eq!(pol.can_delegate_to.len(), 3, "gerente de marketplaces delega aos 3 subgerentes");
     let teams: Vec<Team> = serde_json::from_value(rt.call("teams.list", json!({})).await).unwrap();
-    assert_eq!(teams.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["Google Ads", "Marketplaces", "Mercado Livre", "Shopee"]);
+    assert_eq!(teams.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["Google Ads", "Mercado Livre", "Shopee"]);
     let ml = teams.iter().find(|t| t.name == "Mercado Livre").unwrap();
-    assert_eq!(ml.member_ids.len(), 3);
-    let info: DotTeamInfo = serde_json::from_value(rt.call("dots.team", json!({ "dot_id": ml.manager_dot_id.clone().unwrap() })).await).unwrap();
-    assert_eq!(info.member_of.unwrap().name, "Marketplaces");
+    assert_eq!(ml.manager_dot_id.as_deref(), Some(manager.id.as_str()));
+    assert!(ml.member_ids.is_empty());
     let integ: Option<DotIntegration> = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": manager.id, "kind": "flexi" })).await).unwrap();
-    assert_eq!(integ.unwrap().connection_id, c.id);
-    let ads = teams.iter().find(|t| t.name == "Google Ads").unwrap();
-    assert_eq!(ads.member_ids.len(), 2, "campanhas e publicacao");
-    let publisher = dots.iter().find(|d| d.name == "Agente de Google Ads: Publicacao").unwrap();
-    assert!(publisher.instructions.contains("flexi_ads_publicar_produtos"));
+    let integ = integ.unwrap();
+    assert_eq!(integ.connection_id, c.id);
+    assert_eq!(integ.work_group.as_deref(), Some("mercadolivre"));
+    rt.stop();
+}
+
+#[tokio::test]
+async fn templates_come_from_flexi_especialidades() {
+    let flexi = Flexi::start_at(false, 75).await;
+    let rt = start().await;
+    let c: AppConnection = serde_json::from_value(rt.call("apps.flexi.connect", json!({ "base_url": flexi.url, "email": "agente@teste.com", "senha": "segredo123" })).await).unwrap();
+    assert_eq!(c.status, ConnectionStatus::Connected);
+    // Flexi sem a rota (versao antiga): especialidades embutidas.
+    let tpl: Vec<Value> = serde_json::from_value(rt.call("apps.flexi.templates", json!({})).await).unwrap();
+    assert_eq!(tpl.len(), 3);
+    // Com a rota: a lista do Flexi substitui os embutidos; setor fora da lista e ignorado.
+    reqwest::get(format!("{}/__especialidades", flexi.url)).await.unwrap();
+    let tpl: Vec<Value> = serde_json::from_value(rt.call("apps.flexi.templates", json!({})).await).unwrap();
+    assert_eq!(tpl.iter().map(|t| t["id"].as_str().unwrap()).collect::<Vec<_>>(), vec!["ml_manager", "gerente_de_compras"]);
+    assert!(tpl.iter().all(|t| t["role"] == "supervisor"));
+    assert_eq!(tpl[1]["group"], "compras");
+    assert_eq!(tpl[1]["group_name"], "Compras");
+    assert_eq!(tpl[1]["manages"], "Compras");
+    assert_eq!(tpl[1]["trust"], "write");
+    // Novo gerente com uma especialidade criada no Flexi: setor e cargo vem do Flexi.
+    let d = rt.dot("Ana", "read").await;
+    rt.call("apps.flexi.assign_role", json!({ "dot_id": d.id, "connection_id": c.id, "template_id": "gerente_de_compras" })).await;
+    let integ: Option<DotIntegration> = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": d.id, "kind": "flexi" })).await).unwrap();
+    let integ = integ.unwrap();
+    assert_eq!(integ.role_template.as_deref(), Some("gerente_de_compras"));
+    assert_eq!(integ.work_group.as_deref(), Some("compras"));
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    assert_eq!(dots.iter().find(|x| x.id == d.id).unwrap().role, DotRole::Supervisor);
+    let contacts: Vec<Value> = serde_json::from_value(rt.call("contacts.list", json!({})).await).unwrap();
+    let ana = contacts.iter().find(|x| x["dot"]["id"] == json!(d.id)).unwrap();
+    assert_eq!(ana["title"], "Gerente de Compras");
+    // Funcionario criado pelo usuario: sem especialidade e sem setor.
+    let w = rt.dot("Bia", "read").await;
+    rt.call("apps.flexi.assign_role", json!({ "dot_id": w.id, "connection_id": c.id, "role": "worker" })).await;
+    let integ: Option<DotIntegration> = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": w.id, "kind": "flexi" })).await).unwrap();
+    assert_eq!(integ.unwrap().work_group, None);
+    assert!(rt.try_call("apps.flexi.assign_role", json!({ "dot_id": d.id, "connection_id": c.id, "template_id": "mkt_manager" })).await.is_err(), "especialidade com setor fora da lista");
+    rt.stop();
+}
+
+#[tokio::test]
+async fn browser_login_creates_connection_and_reuses_it_on_relogin() {
+    let flexi = Flexi::start_at(false, 25).await;
+    let rt = start().await;
+    let ch = rt.call("apps.flexi.browser_start", json!({ "base_url": flexi.url })).await;
+    assert_eq!(ch["code"], "ABC-123");
+    assert_eq!(ch["authorize_url"], format!("{}/login-external-app?token=tok-1", flexi.url));
+    assert_eq!(rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await["status"], "pending");
+    reqwest::get(format!("{}/__approve", flexi.url)).await.unwrap();
+    let done = rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await;
+    assert_eq!(done["status"], "authenticated");
+    let c: AppConnection = serde_json::from_value(done["connection"].clone()).unwrap();
+    assert_eq!(c.status, ConnectionStatus::Connected);
+    assert_eq!(c.email, "agente@teste.com");
+    assert_eq!(c.user_name.as_deref(), Some("Agente Teste"));
+    assert!(!c.remember_password);
+    // token ja usado: o runtime nao acompanha mais
+    assert_eq!(rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await["status"], "not_found");
+    // foto de perfil vira data URL com o tipo descoberto pela assinatura (o servidor manda octet-stream)
+    let photo = rt.call("apps.flexi.photo", json!({ "id": c.id })).await;
+    assert!(photo["data_url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+    // sessao expirou: logar de novo pelo navegador atualiza a mesma conexao
+    reqwest::get(format!("{}/__expire", flexi.url)).await.unwrap();
+    rt.call("apps.flexi.browser_start", json!({ "base_url": flexi.url })).await;
+    reqwest::get(format!("{}/__approve", flexi.url)).await.unwrap();
+    let again = rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await;
+    assert_eq!(again["connection"]["id"], c.id);
+    let conns: Vec<AppConnection> = serde_json::from_value(rt.call("apps.list", json!({})).await).unwrap();
+    assert_eq!(conns.len(), 1);
+    // recusado no navegador: nada muda
+    rt.call("apps.flexi.browser_start", json!({ "base_url": flexi.url })).await;
+    reqwest::get(format!("{}/__deny", flexi.url)).await.unwrap();
+    assert_eq!(rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await["status"], "denied");
     rt.stop();
 }

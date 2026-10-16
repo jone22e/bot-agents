@@ -262,6 +262,69 @@ async fn worker_question_goes_to_supervisor_and_delegation_waits_for_answer() {
 }
 
 #[tokio::test]
+async fn worker_permission_request_goes_to_supervisor() {
+    let mut rt = start().await;
+    let sup = rt.create_dot("Gerente", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let w = rt.create_dot("Escritor", "read", "worker").await;
+    let task: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Escritor:DENY:x.txt", "title": "Coordenar" })).await).unwrap();
+    // o funcionario (nivel "so le") tenta escrever: o pedido de permissao vai ao gerente como tarefa
+    let a: Approval = serde_json::from_value(rt.wait_event("approval.requested", Duration::from_secs(30)).await).unwrap();
+    assert_eq!(a.dot_id, w.id);
+    assert_eq!(a.tool, "dots_write_file");
+    let decided = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin == format!("approval:{}", a.id) && t.status == TaskStatus::Completed), Duration::from_secs(40)).await;
+    let dt = decided.iter().find(|t| t.origin.starts_with("approval:")).unwrap();
+    assert!(dt.prompt.contains("pede permissao") && dt.prompt.contains("dots_write_file"), "{}", dt.prompt);
+    assert_eq!(dt.result_text.as_deref(), Some("DECIDI"));
+    // com a permissao do gerente, o funcionario escreveu e a delegacao fechou com o resultado
+    let child = rt.wait_tasks(&w.id, |ts| ts.iter().any(|t| t.origin.starts_with("delegation:") && t.status == TaskStatus::Completed), Duration::from_secs(40)).await;
+    let c = child.iter().find(|t| t.origin.starts_with("delegation:")).unwrap();
+    assert_eq!(c.result_text.as_deref(), Some("ESCREVEU"));
+    let v = rt.call("tasks.children", json!({ "id": task.id })).await;
+    let dl: Vec<Delegation> = serde_json::from_value(v["delegations"].clone()).unwrap();
+    assert_eq!(dl[0].status, DelegationStatus::Completed);
+    let stats: RuntimeStats = serde_json::from_value(rt.call("stats.get", json!({})).await).unwrap();
+    assert_eq!(stats.approvals_pending, 0);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn supervisor_sees_stopped_worker_and_resumes_delegation() {
+    let rt = start().await;
+    let sup = rt.create_dot("Chefe", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let w = rt.create_dot("Lento", "read", "worker").await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Lento:SLEEP:2" })).await).unwrap();
+    rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
+    let child = rt.wait_tasks(&w.id, |ts| ts.iter().any(|x| x.origin.starts_with("delegation:")), Duration::from_secs(20)).await;
+    let child = child.into_iter().find(|x| x.origin.starts_with("delegation:")).unwrap();
+    let did = child.origin.trim_start_matches("delegation:").to_string();
+    // o funcionario para (cancelado): a delegacao fica cancelada e o gerente ve isso no status
+    rt.call("tasks.cancel", json!({ "id": child.id })).await;
+    rt.wait_task(&child.id, &[TaskStatus::Cancelled], Duration::from_secs(15)).await;
+    let v = rt.call("tasks.children", json!({ "id": t.id })).await;
+    let dl: Vec<Delegation> = serde_json::from_value(v["delegations"].clone()).unwrap();
+    assert_eq!(dl[0].status, DelegationStatus::Cancelled);
+    // o gerente retoma: a tarefa volta a fila, roda e a delegacao termina concluida
+    let r: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
+    let r = rt.wait_task(&r.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    assert_eq!(r.result_text.as_deref(), Some("RETOMEI"), "{:?}", r.result_text);
+    let done = rt.wait_task(&child.id, &[TaskStatus::Completed], Duration::from_secs(40)).await;
+    assert_eq!(done.result_text.as_deref(), Some("ACORDEI"));
+    let v = rt.call("tasks.children", json!({ "id": t.id })).await;
+    let dl: Vec<Delegation> = serde_json::from_value(v["delegations"].clone()).unwrap();
+    assert_eq!(dl[0].status, DelegationStatus::Completed);
+    assert_eq!(dl[0].result.as_deref(), Some("ACORDEI"));
+    // so quem delegou pode retomar
+    let other = rt.create_dot("Outro", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": other.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let x: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": other.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
+    let x = rt.wait_task(&x.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    assert!(x.result_text.as_deref().unwrap().starts_with("FALHOU:"), "{:?}", x.result_text);
+    rt.stop();
+}
+
+#[tokio::test]
 async fn restart_resumes_from_checkpoint_without_repeating_command() {
     let rt = start().await;
     let d = rt.create_dot("Executor", "exec", "worker").await;
@@ -322,5 +385,214 @@ async fn cron_schedule_fires_a_task() {
     assert!(after.last_run_at.is_some() && after.next_run_at.unwrap() > next);
     let evs: Vec<EventRecord> = serde_json::from_value(rt.call("events.list", json!({ "event_type": "schedule.due" })).await).unwrap();
     assert_eq!(evs.len(), 1);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn manager_hires_within_limit_and_never_does_the_work() {
+    let rt = start().await;
+    rt.call("settings.set", json!({ "key": "teams.max_employees_per_manager", "value": 1 })).await;
+    let sup = rt.create_dot("Chefe", "write", "supervisor").await;
+    // Mesmo com nivel "escrita", o gerente nao executa o trabalho.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "WRITE:x.txt:oi", "title": "Escrever" })).await).unwrap();
+    let done = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    let r = done.result_text.unwrap_or_default();
+    assert!(r.starts_with("FALHOU: NEGADO") && r.contains("dots_hire_employee"), "{r}");
+    assert!(!std::path::Path::new(sup.workspace_path.as_deref().unwrap()).join("x.txt").exists());
+
+    // Sem funcionarios e sem equipe: contrata (a equipe nasce com ele).
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"Ana","role":"Redatora","instructions":"Escreve textos curtos"}"#, "title": "Contratar" })).await).unwrap();
+    let done = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    let r = done.result_text.unwrap_or_default();
+    assert!(r.starts_with("OK 'Ana' foi contratado") && r.contains("1 de 1"), "{r}");
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    let ana = dots.iter().find(|d| d.name == "Ana").expect("Ana criada");
+    assert_eq!(ana.role, DotRole::Worker);
+    assert_eq!(ana.primary_engine, Some(EngineKind::Claude));
+    assert_eq!(ana.description, "Redatora");
+    let info: DotTeamInfo = serde_json::from_value(rt.call("dots.team", json!({ "dot_id": sup.id })).await).unwrap();
+    let team = info.manages.expect("equipe criada para o gerente");
+    assert_eq!(team.member_ids, vec![ana.id.clone()]);
+    let sp: ToolPolicy = serde_json::from_value(rt.call("policies.get", json!({ "dot_id": sup.id })).await).unwrap();
+    assert_eq!(sp.can_delegate_to, vec![ana.id.clone()]);
+    let ap: ToolPolicy = serde_json::from_value(rt.call("policies.get", json!({ "dot_id": ana.id })).await).unwrap();
+    assert_eq!(ap.auto_approve_level, AutoApproveLevel::Write, "mesmas permissoes do gerente");
+    assert!(ap.can_delegate_to.is_empty());
+    let contacts: Vec<Contact> = serde_json::from_value(rt.call("contacts.list", json!({})).await).unwrap();
+    assert_eq!(contacts.iter().find(|c| c.dot.id == ana.id).unwrap().title.as_deref(), Some("Redatora"));
+
+    // Limite atingido.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"Bia","role":"Revisora"}"#, "title": "Contratar" })).await).unwrap();
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("ERRO limite de 1"), "{r}");
+    // Nome repetido.
+    rt.call("settings.set", json!({ "key": "teams.max_employees_per_manager", "value": 3 })).await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"ana","role":"Revisora"}"#, "title": "Contratar" })).await).unwrap();
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("ERRO ja existe um DOT chamado"), "{r}");
+    // Funcionario nao contrata.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": ana.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"Caio","role":"Ajudante"}"#, "title": "Contratar" })).await).unwrap();
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("ERRO so um gerente contrata"), "{r}");
+    // O gerente delega ao contratado, que faz o trabalho.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Ana:WRITE:a.txt:oi", "title": "Coordenar" })).await).unwrap();
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("AGUARDANDO ok:"), "{r}");
+    let child = rt.wait_tasks(&ana.id, |ts| ts.iter().any(|t| t.origin.starts_with("delegation:") && t.status == TaskStatus::Completed), Duration::from_secs(40)).await;
+    assert_eq!(child.iter().find(|t| t.origin.starts_with("delegation:")).unwrap().result_text.as_deref(), Some("FEITO"));
+    rt.stop();
+}
+
+#[tokio::test]
+async fn dismissal_deletes_employee_and_frees_the_slot() {
+    let mut rt = start().await;
+    rt.call("settings.set", json!({ "key": "teams.max_employees_per_manager", "value": 1 })).await;
+    let sup = rt.create_dot("Chefe", "read", "supervisor").await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"Ana","role":"Redatora"}"#, "title": "Contratar" })).await).unwrap();
+    rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_dismiss_employee:{"dot":"Ana","reason":"publicou sem revisar","lesson":"revisar antes de publicar"}"#, "title": "Demitir" })).await).unwrap();
+    let a: Approval = serde_json::from_value(rt.wait_event("approval.requested", Duration::from_secs(30)).await).unwrap();
+    assert_eq!(a.tool, "dots_dismiss_employee");
+    rt.call("approvals.decide", json!({ "id": a.id, "approved": true })).await;
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("OK 'Ana' foi demitido e excluido") && r.contains("0 de 1") && r.contains("dots_hire_employee"), "{r}");
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({ "include_archived": true })).await).unwrap();
+    assert!(!dots.iter().any(|d| d.name == "Ana"), "o demitido foi excluido");
+    let info: DotTeamInfo = serde_json::from_value(rt.call("dots.team", json!({ "dot_id": sup.id })).await).unwrap();
+    let team = info.manages.unwrap();
+    assert!(team.member_ids.is_empty());
+    let sp: ToolPolicy = serde_json::from_value(rt.call("policies.get", json!({ "dot_id": sup.id })).await).unwrap();
+    assert!(sp.can_delegate_to.is_empty());
+    let ds: Vec<Dismissal> = serde_json::from_value(rt.call("dismissals.list", json!({ "team_id": team.id })).await).unwrap();
+    assert_eq!(ds.len(), 1);
+    assert!(ds[0].dot_id.is_none() && ds[0].dot_name == "Ana" && ds[0].lesson == "revisar antes de publicar");
+    // A vaga ficou livre: o gerente contrata o substituto.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": r#"FLEXI:dots_hire_employee:{"name":"Carla","role":"Redatora"}"#, "title": "Contratar" })).await).unwrap();
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("OK 'Carla' foi contratado"), "{r}");
+    rt.stop();
+}
+
+#[tokio::test]
+async fn group_message_reaches_every_manager_and_collects_replies() {
+    let rt = start().await;
+    let a = rt.create_dot("Gerente A", "read", "supervisor").await;
+    let b = rt.create_dot("Gerente B", "read", "worker").await;
+    let w = rt.create_dot("Avulso", "read", "worker").await;
+    // B vira gerente por gerenciar uma equipe (o papel acompanha); o avulso fica fora do grupo.
+    rt.call("teams.create", json!({ "name": "Equipe B", "manager_dot_id": b.id })).await;
+    let members: Vec<Dot> = serde_json::from_value(rt.call("group.members", json!({})).await).unwrap();
+    let mut ids: Vec<String> = members.iter().map(|d| d.id.clone()).collect();
+    ids.sort();
+    let mut want = vec![a.id.clone(), b.id.clone()];
+    want.sort();
+    assert_eq!(ids, want);
+    let sent = rt.call("group.send", json!({ "content": "Bom dia, como estao as equipes?" })).await;
+    assert_eq!(sent["tasks"].as_array().unwrap().len(), 2);
+    for d in [&a, &b] {
+        let ts = rt.wait_tasks(&d.id, |ts| ts.iter().any(|t| t.origin.starts_with("group:") && t.status == TaskStatus::Completed), Duration::from_secs(30)).await;
+        let gt = ts.iter().find(|t| t.origin.starts_with("group:")).unwrap();
+        assert!(gt.prompt.contains("grupo geral") && gt.prompt.contains("Bom dia"));
+        // A mensagem tambem aparece na conversa do gerente.
+        let conv: Conversation = serde_json::from_value(rt.call("conversations.main", json!({ "dot_id": d.id })).await).unwrap();
+        let msgs: Vec<Message> = serde_json::from_value(rt.call("conversations.messages", json!({ "id": conv.id })).await).unwrap();
+        assert!(msgs.iter().any(|m| m.role == MessageRole::User && m.content == "Bom dia, como estao as equipes?"));
+    }
+    assert!(rt.tasks(&w.id).await.is_empty(), "quem nao e gerente nao recebe");
+    let start = Instant::now();
+    let msgs: Vec<GroupMessage> = loop {
+        let m: Vec<GroupMessage> = serde_json::from_value(rt.call("group.messages", json!({})).await).unwrap();
+        if m.iter().filter(|x| x.role == MessageRole::Dot && x.content == "OK").count() == 2 { break m; }
+        assert!(start.elapsed() < Duration::from_secs(15), "respostas nao chegaram ao grupo: {m:?}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(msgs[0].role, MessageRole::User);
+    let mut names: Vec<String> = msgs.iter().filter_map(|m| m.dot_name.clone()).collect();
+    names.sort();
+    assert_eq!(names, vec!["Gerente A".to_string(), "Gerente B".to_string()]);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn group_mention_only_the_marked_manager_answers() {
+    let rt = start().await;
+    let a = rt.create_dot("Roberto", "read", "supervisor").await;
+    let b = rt.create_dot("Joao", "read", "supervisor").await;
+    let sent = rt.call("group.send", json!({ "content": "@Roberto, precisa fazer mais por hora", "mentions": [a.id] })).await;
+    assert_eq!(sent["tasks"].as_array().unwrap().len(), 2, "todos recebem");
+    assert_eq!(sent["message"]["metadata"]["mentions"][0]["name"], "Roberto");
+    let ta = rt.wait_tasks(&a.id, |ts| ts.iter().any(|t| t.origin.starts_with("group:") && t.status == TaskStatus::Completed), Duration::from_secs(30)).await;
+    assert!(ta.iter().find(|t| t.origin.starts_with("group:")).unwrap().prompt.contains("dirigida a voce"));
+    let tb = rt.wait_tasks(&b.id, |ts| ts.iter().any(|t| t.origin.starts_with("group-cc:") && t.status == TaskStatus::Completed), Duration::from_secs(30)).await;
+    assert!(tb.iter().all(|t| !t.origin.starts_with("group:")), "quem nao foi marcado recebe so para ciencia");
+    assert!(tb[0].prompt.contains("nao a voce"));
+    let msgs: Vec<GroupMessage> = serde_json::from_value(rt.call("group.messages", json!({})).await).unwrap();
+    let names: Vec<String> = msgs.iter().filter_map(|m| m.dot_name.clone()).collect();
+    assert_eq!(names, vec!["Roberto".to_string()], "so o marcado responde no grupo: {msgs:?}");
+    rt.stop();
+}
+
+async fn run_task(rt: &Rt, dot: &Dot, prompt: String) -> String {
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": dot.id, "prompt": prompt, "title": "x" })).await).unwrap();
+    rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default()
+}
+
+#[tokio::test]
+async fn dot_schedules_its_own_work_and_tells_the_conversation() {
+    let rt = start().await;
+    let a = rt.create_dot("Roberto", "read", "supervisor").await;
+    let b = rt.create_dot("Marina", "read", "worker").await;
+    let create = r#"FLEXI:dots_schedule_create:{"kind":"every","spec":"60","prompt":"Rodada horaria e relatorio"}"#;
+    // Mesmo o gerente (que nao executa trabalho) agenda o proprio acompanhamento.
+    let r = run_task(&rt, &a, create.into()).await;
+    assert!(r.starts_with("OK agendado") && r.contains("a cada 60 min"), "{r}");
+    let list: Vec<Schedule> = serde_json::from_value(rt.call("schedules.list", json!({ "dot_id": a.id })).await).unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].next_run_at.is_some());
+    // Avisa na conversa.
+    let conv: Conversation = serde_json::from_value(rt.call("conversations.main", json!({ "dot_id": a.id })).await).unwrap();
+    let msgs: Vec<Message> = serde_json::from_value(rt.call("conversations.messages", json!({ "id": conv.id })).await).unwrap();
+    assert!(msgs.iter().any(|m| m.role == MessageRole::System && m.content.starts_with("Roberto agendou: a cada 60 min")), "{msgs:?}");
+    // Repetido nao duplica; intervalo curto demais e recusado.
+    assert!(run_task(&rt, &a, create.into()).await.contains("ja existe"));
+    assert!(run_task(&rt, &a, r#"FLEXI:dots_schedule_create:{"kind":"every","spec":"1","prompt":"x"}"#.into()).await.starts_with("ERRO intervalo minimo"));
+    assert_eq!(serde_json::from_value::<Vec<Schedule>>(rt.call("schedules.list", json!({ "dot_id": a.id })).await).unwrap().len(), 1);
+    // Outro DOT nao ve nem cancela o agendamento.
+    assert!(run_task(&rt, &b, "FLEXI:dots_schedule_list:{}".into()).await.contains("nenhum agendamento"));
+    let cancel = format!(r#"FLEXI:dots_schedule_cancel:{{"id":"{}"}}"#, list[0].id);
+    assert!(run_task(&rt, &b, cancel.clone()).await.starts_with("ERRO agendamento"));
+    // O dono lista e cancela.
+    assert!(run_task(&rt, &a, "FLEXI:dots_schedule_list:{}".into()).await.contains(&list[0].id));
+    assert!(run_task(&rt, &a, cancel).await.starts_with("OK agendamento cancelado"));
+    assert!(serde_json::from_value::<Vec<Schedule>>(rt.call("schedules.list", json!({ "dot_id": a.id })).await).unwrap().is_empty());
+    rt.stop();
+}
+
+#[tokio::test]
+async fn approved_once_the_same_kind_of_action_does_not_ask_again() {
+    let mut rt = start().await;
+    let w = rt.create_dot("Escritor", "read", "worker").await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": w.id, "prompt": "WRITE:a.txt:1", "title": "1" })).await).unwrap();
+    let a: Approval = serde_json::from_value(rt.wait_event("approval.requested", Duration::from_secs(30)).await).unwrap();
+    rt.call("approvals.decide", json!({ "id": a.id, "approved": true })).await;
+    assert_eq!(rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.as_deref(), Some("FEITO"));
+    let learned: Vec<LearnedPermission> = serde_json::from_value(rt.call("policies.learned", json!({ "dot_id": w.id })).await).unwrap();
+    assert_eq!(learned.len(), 1);
+    assert_eq!(learned[0].approval_id.as_deref(), Some(a.id.as_str()));
+    // Mesma acao de novo: nao pede.
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": w.id, "prompt": "WRITE:a.txt:2", "title": "2" })).await).unwrap();
+    assert_eq!(rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.as_deref(), Some("FEITO"));
+    let approvals: Vec<Approval> = serde_json::from_value(rt.call("approvals.list", json!({ "pending_only": false })).await).unwrap();
+    assert_eq!(approvals.len(), 1, "so a primeira pediu");
+    // Esquecida, volta a pedir.
+    rt.call("policies.forget", json!({ "id": learned[0].id })).await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": w.id, "prompt": "WRITE:a.txt:3", "title": "3" })).await).unwrap();
+    let a2: Approval = serde_json::from_value(rt.wait_event("approval.requested", Duration::from_secs(30)).await).unwrap();
+    assert_ne!(a2.id, a.id);
+    rt.call("approvals.decide", json!({ "id": a2.id, "approved": false, "reason": "grave em b.txt" })).await;
+    let r = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default();
+    assert!(r.starts_with("FALHOU: NEGADO") && r.contains("grave em b.txt"), "o que fazer diferente chega ao DOT: {r}");
+    let learned: Vec<LearnedPermission> = serde_json::from_value(rt.call("policies.learned", json!({ "dot_id": w.id })).await).unwrap();
+    assert!(learned.is_empty(), "negada nao aprende");
     rt.stop();
 }

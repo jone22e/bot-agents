@@ -218,6 +218,12 @@ async fn cancel_and_two_dots_in_parallel_and_conversation() {
     assert!(sys.contains("\"A\""), "identidade no system prompt: {sys}");
     let exec: Execution = serde_json::from_value(rt.call("tasks.get", json!({ "id": t2.id })).await["executions"][0].clone()).unwrap();
     assert_eq!(exec.engine_session_id, conv.engine_sessions["claude"].as_str().map(String::from), "retomou a mesma sessao");
+    assert!(!sys.contains("Memorias relevantes") && !sys.contains("continuacao"), "system prompt fica estavel entre turnos (cache): {sys}");
+    // O que muda por turno (retomada, memorias) vai no bloco de contexto do prompt da tarefa.
+    let sent = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "ECHO_CONTEXT cor preferida" })).await;
+    let tc: Task = serde_json::from_value(sent["task"].clone()).unwrap();
+    let ctx = rt.wait_task(&tc.id, &[TaskStatus::Completed], Duration::from_secs(20)).await.result_text.unwrap();
+    assert!(ctx.contains("continuacao") && ctx.contains("azul"), "contexto da tarefa com retomada e memoria: {ctx}");
     // dots_recall via gateway encontra a memoria
     let sent = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "RECALL:cor preferida" })).await;
     let t3: Task = serde_json::from_value(sent["task"].clone()).unwrap();

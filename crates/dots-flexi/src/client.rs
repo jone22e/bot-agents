@@ -67,6 +67,26 @@ pub enum LoginOutcome {
     MfaRequired { challenge_token: String, expires_at: Option<String> },
 }
 
+/// Pedido de "Logar com Flexi": o usuario autoriza no navegador, ja logado no Flexi.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrowserLoginChallenge {
+    pub token: String,
+    /// Codigo exibido no app e na pagina do Flexi, para o usuario conferir.
+    pub code: String,
+    pub authorize_url: String,
+    pub expires_at: Option<String>,
+    pub poll_interval_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrowserLoginPoll {
+    Pending,
+    /// Sessao recebida (cookie `userdata` ja esta no jar deste cliente).
+    Authenticated,
+    /// Encerrado sem sessao: `expired`, `denied`, `consumed` ou desconhecido.
+    Closed(String),
+}
+
 /// Cliente HTTP com cookie jar (sessao `userdata`).
 #[derive(Clone)]
 pub struct FlexiClient {
@@ -173,6 +193,80 @@ impl FlexiClient {
             return Err(FlexiError::Unauthenticated("sessao expirada ou invalida".into()));
         }
         Ok(session_from(v.get("user").unwrap_or(&Value::Null), v.get("empresa")))
+    }
+
+    /// `POST /api/auth/app-externo/desafios`: cria o pedido e devolve a URL para abrir no navegador.
+    pub async fn start_browser_login(&self, app: &str) -> Result<BrowserLoginChallenge> {
+        let resp = self
+            .http
+            .post(self.url("/api/auth/app-externo/desafios"))
+            .json(&json!({ "app": app }))
+            .send()
+            .await
+            .map_err(|e| FlexiError::Http(e.to_string()))?;
+        let status = resp.status();
+        let v: Value = resp.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(FlexiError::Rejected(format!("HTTP {}: {}", status.as_u16(), v.get("error").and_then(|m| m.as_str()).unwrap_or("falha ao iniciar o login"))));
+        }
+        let token = v.get("token").and_then(|t| t.as_str()).filter(|t| !t.is_empty()).ok_or_else(|| FlexiError::Protocol("desafio sem token".into()))?;
+        let path = v.get("authorize_path").and_then(|t| t.as_str()).ok_or_else(|| FlexiError::Protocol("desafio sem authorize_path".into()))?;
+        let authorize_url = self.base_url.join(path).map_err(|e| FlexiError::Protocol(format!("authorize_path invalido: {e}")))?;
+        Ok(BrowserLoginChallenge {
+            token: token.to_string(),
+            code: v.get("codigo").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+            authorize_url: authorize_url.to_string(),
+            expires_at: v.get("expires_at").and_then(|t| t.as_str()).map(String::from),
+            poll_interval_ms: v.get("poll_interval_ms").and_then(|t| t.as_u64()).unwrap_or(2000),
+        })
+    }
+
+    /// `GET /api/auth/app-externo/desafios/:token`: depois da autorizacao o Flexi grava o cookie de sessao.
+    pub async fn poll_browser_login(&self, token: &str) -> Result<BrowserLoginPoll> {
+        if token.is_empty() || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(FlexiError::Protocol("token de login invalido".into()));
+        }
+        let resp = self.http.get(self.url(&format!("/api/auth/app-externo/desafios/{token}"))).send().await.map_err(|e| FlexiError::Http(e.to_string()))?;
+        let status = resp.status();
+        let v: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.as_u16() == 404 {
+            return Ok(BrowserLoginPoll::Closed("not_found".into()));
+        }
+        if !status.is_success() {
+            return Err(FlexiError::Rejected(format!("HTTP {}: {}", status.as_u16(), v.get("error").and_then(|m| m.as_str()).unwrap_or("falha ao acompanhar o login"))));
+        }
+        Ok(match v.get("status").and_then(|s| s.as_str()).unwrap_or("") {
+            "pending" | "approved" => BrowserLoginPoll::Pending,
+            "authenticated" if self.session_cookie().is_some() => BrowserLoginPoll::Authenticated,
+            "authenticated" => return Err(FlexiError::Protocol("Flexi confirmou o login mas nao enviou a sessao".into())),
+            other => BrowserLoginPoll::Closed(other.to_string()),
+        })
+    }
+
+    /// Foto de perfil do usuario logado (`GET /api/me/profile-photo`). `None` quando ele nao tem foto.
+    pub async fn profile_photo(&self) -> Result<Option<(String, Vec<u8>)>> {
+        let resp = self
+            .http
+            .get(self.url("/api/me/profile-photo"))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| FlexiError::Http(e.to_string()))?;
+        match resp.status().as_u16() {
+            401 => return Err(FlexiError::Unauthenticated("sessao expirada".into())),
+            404 => return Ok(None),
+            s if !(200..300).contains(&s) => return Err(FlexiError::Http(format!("HTTP {s} ao buscar a foto de perfil"))),
+            _ => {}
+        }
+        let v: Value = resp.json().await.map_err(|e| FlexiError::Protocol(e.to_string()))?;
+        let Some(photo_url) = v.get("url").and_then(|u| u.as_str()).filter(|u| !u.is_empty()) else { return Ok(None) };
+        let img = self.http.get(photo_url).send().await.map_err(|e| FlexiError::Http(e.to_string()))?;
+        if !img.status().is_success() {
+            return Err(FlexiError::Http(format!("HTTP {} ao baixar a foto de perfil", img.status().as_u16())));
+        }
+        let mime = img.headers().get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("image/jpeg").to_string();
+        let bytes = img.bytes().await.map_err(|e| FlexiError::Http(e.to_string()))?;
+        Ok(Some((mime, bytes.to_vec())))
     }
 
     pub async fn logout(&self) {

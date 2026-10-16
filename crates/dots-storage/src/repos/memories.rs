@@ -96,6 +96,12 @@ impl<'a> MemoriesRepo<'a> {
         Ok(())
     }
 
+    /// Zera a memoria do DOT (todas as categorias). Devolve quantas foram apagadas.
+    pub fn delete_all_for_dot(&mut self, dot_id: &str) -> DotsResult<u32> {
+        let n = self.conn.execute("DELETE FROM memories WHERE dot_id = ?1", params![dot_id]).map_err(storage_err)?;
+        Ok(n as u32)
+    }
+
     /// Memoria de trabalho: uma por (dot, source). Cria ou substitui.
     pub fn upsert_working(&mut self, dot_id: &str, source: &str, content: &str) -> DotsResult<Memory> {
         let existing: Option<String> = self

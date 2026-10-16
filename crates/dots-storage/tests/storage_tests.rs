@@ -268,13 +268,21 @@ mod phase2 {
         let (mut s, dot_id) = with_dot();
         let a = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "A".into(), retry_safe: Some(true), ..Default::default() }, None).unwrap();
         let b = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "B".into(), ..Default::default() }, None).unwrap();
+        // pedido delegado (nao retry_safe) volta a fila: o gerente espera por ele
+        let c = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "C".into(), origin: Some("delegation:d1".into()), ..Default::default() }, None).unwrap();
         s.tasks().set_status(&a.id, TaskStatus::Running, None).unwrap();
         s.tasks().set_status(&b.id, TaskStatus::Running, None).unwrap();
+        s.tasks().set_status(&c.id, TaskStatus::Running, None).unwrap();
         s.executions().create(&a.id, &dot_id, EngineKind::Codex, 1, None).unwrap();
         assert_eq!(s.executions().mark_interrupted().unwrap(), 1);
         let recovered = s.tasks().recover_interrupted().unwrap();
-        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered.len(), 3);
         assert_eq!(s.tasks().get(&a.id).unwrap().status, TaskStatus::Queued);
+        assert_eq!(s.tasks().get(&b.id).unwrap().status, TaskStatus::Queued, "um reinicio nao mata o trabalho");
+        assert_eq!(s.tasks().get(&c.id).unwrap().status, TaskStatus::Queued);
+        // segundo reinicio da tarefa comum (max_attempts 1) ja aguarda o usuario
+        s.tasks().set_status(&b.id, TaskStatus::Running, None).unwrap();
+        s.tasks().recover_interrupted().unwrap();
         assert_eq!(s.tasks().get(&b.id).unwrap().status, TaskStatus::WaitingUser);
     }
 
@@ -412,13 +420,16 @@ mod phase3 {
         assert!(s.checkpoints().find_invocation(&t.id, "dots_run_command", "h1").unwrap().is_none());
         s.checkpoints().record_invocation(&t.id, "e1", "dots_run_command", "h1", "ok", "saida").unwrap();
         assert_eq!(s.checkpoints().find_invocation(&t.id, "dots_run_command", "h1").unwrap().as_deref(), Some("saida"));
-        // recuperacao: retry_safe com tentativa restante volta a fila; esgotado aguarda usuario
+        // recuperacao: volta a fila enquanto as tentativas nao passam de max_attempts (retry_safe: 2); depois aguarda usuario
         s.tasks().set_status(&t.id, TaskStatus::Running, None).unwrap();
         let rec = s.tasks().recover_interrupted().unwrap();
         assert_eq!(rec[0].1, TaskStatus::Queued);
         s.tasks().set_status(&t.id, TaskStatus::Running, None).unwrap();
         let rec = s.tasks().recover_interrupted().unwrap();
-        assert_eq!(rec[0].1, TaskStatus::WaitingUser, "2a tentativa esgotou max_attempts");
+        assert_eq!(rec[0].1, TaskStatus::Queued, "2a tentativa ainda dentro de max_attempts");
+        s.tasks().set_status(&t.id, TaskStatus::Running, None).unwrap();
+        let rec = s.tasks().recover_interrupted().unwrap();
+        assert_eq!(rec[0].1, TaskStatus::WaitingUser, "3a tentativa esgotou max_attempts");
     }
 
     #[test]
@@ -482,4 +493,43 @@ mod flexi_phase {
         s.apps().delete(&c.id).unwrap();
         assert_eq!(s.apps().list(Some("flexi")).unwrap().len(), 0);
     }
+}
+
+#[test]
+fn dismissal_is_recorded_and_memory_is_wiped() {
+    use dots_core::{MemoryCreate, MemoryKind, MessageRole, TeamCreate};
+    use dots_storage::repos::DismissalInput;
+    let mut s = Storage::open_in_memory().unwrap();
+    let mk = |s: &mut Storage, name: &str| s.dots().create("user", DotCreate { name: name.into(), description: "".into(), objective: "".into(), instructions: "".into(), primary_engine: None, model: None, workspace_path: None, limits: None, role: None }, Some(format!("/tmp/ws/{name}"))).unwrap();
+    let boss = mk(&mut s, "Milei");
+    let emp = mk(&mut s, "Lula");
+    let team = s.teams().create(TeamCreate { name: "Mercado Livre".into(), description: "".into(), manager_dot_id: Some(boss.id.clone()), member_ids: vec![emp.id.clone()] }).unwrap();
+    s.memories().create(MemoryCreate { dot_id: emp.id.clone(), kind: MemoryKind::LongTerm, content: "preco do kit".into(), importance: Some(3), source: None }).unwrap();
+    s.memories().create(MemoryCreate { dot_id: emp.id.clone(), kind: MemoryKind::History, content: "publicou".into(), importance: None, source: None }).unwrap();
+    s.memories().create(MemoryCreate { dot_id: boss.id.clone(), kind: MemoryKind::LongTerm, content: "do chefe".into(), importance: None, source: None }).unwrap();
+    let conv = s.conversations().main(&emp.id).unwrap();
+    s.conversations().add_message(&conv.id, MessageRole::User, "oi", None, None, serde_json::json!({})).unwrap();
+
+    let wiped = s.memories().delete_all_for_dot(&emp.id).unwrap();
+    assert_eq!(wiped, 2);
+    assert_eq!(s.conversations().delete_for_dot(&emp.id).unwrap(), 1);
+    assert!(s.memories().list(&emp.id, None, 0).unwrap().is_empty());
+    assert_eq!(s.memories().list(&boss.id, None, 0).unwrap().len(), 1, "a memoria do gerente fica");
+    assert!(s.memories().search(&emp.id, "kit", &[], 10).unwrap().is_empty(), "o indice FTS acompanha");
+    let fresh = s.conversations().main(&emp.id).unwrap();
+    assert_ne!(fresh.id, conv.id);
+    assert!(s.conversations().messages(&fresh.id, 10).unwrap().is_empty());
+
+    let d = s.dismissals().create(DismissalInput { team_id: Some(&team.id), team_name: &team.name, manager_dot_id: &boss.id, manager_name: "Milei", dot_id: &emp.id, dot_name: "Lula", reason: "publicou sem revisar".into(), lesson: "", memories_wiped: wiped }).unwrap();
+    assert_eq!(d.memories_wiped, 2);
+    assert_eq!(s.dismissals().for_team(&team.id, 0).unwrap().len(), 1);
+    assert_eq!(s.dismissals().for_dot(&emp.id, 0).unwrap()[0].reason, "publicou sem revisar");
+    assert_eq!(s.dismissals().by_manager(&boss.id, 0).unwrap().len(), 1);
+    assert!(s.dismissals().create(DismissalInput { team_id: None, team_name: "", manager_dot_id: &boss.id, manager_name: "", dot_id: &emp.id, dot_name: "", reason: "  ", lesson: "", memories_wiped: 0 }).is_err(), "motivo obrigatorio");
+    // O DOT continua na equipe e o registro sobrevive a exclusao do DOT.
+    assert_eq!(s.teams().get(&team.id).unwrap().member_ids, vec![emp.id.clone()]);
+    s.dots().delete("user", &emp.id).unwrap();
+    let kept = s.dismissals().recent(10).unwrap();
+    assert_eq!(kept.len(), 1);
+    assert!(kept[0].dot_id.is_none() && kept[0].dot_name == "Lula");
 }

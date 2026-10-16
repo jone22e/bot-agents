@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dots_core::{AppConnection, ConnectionStatus, DotsError, DotsResult, FlexiConnectInput, RiskLevel};
-use dots_flexi::{FlexiClient, FlexiError, LoginOutcome, SecretStore, SessionInfo, ToolRisk, find_tool};
+use dots_flexi::{BrowserLoginPoll, FlexiClient, FlexiError, LoginOutcome, SecretStore, SessionInfo, ToolRisk, find_tool};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -16,22 +16,35 @@ pub const KIND: &str = "flexi";
 pub const DEFAULT_BASE_URL: &str = "https://flexi.c2s-business.com";
 const MAX_RESULT_CHARS: usize = 60_000;
 
-/// Clientes vivos por conexao + desafios 2FA pendentes.
+/// Clientes vivos por conexao + desafios 2FA pendentes + logins pelo navegador em andamento (por token).
 pub struct FlexiRegistry {
     pub clients: Mutex<HashMap<String, FlexiClient>>,
     pub mfa: Mutex<HashMap<String, (FlexiClient, String)>>,
+    pub browser: Mutex<HashMap<String, FlexiClient>>,
     pub secrets: Arc<dyn SecretStore>,
+    /// Ultimas especialidades lidas do Flexi (cargo dos contatos e reserva quando o Flexi nao responde).
+    pub templates: std::sync::Mutex<Option<Vec<crate::flexi_team::FlexiRoleTemplate>>>,
 }
 
 impl FlexiRegistry {
     pub fn new(secrets: Arc<dyn SecretStore>) -> Self {
-        Self { clients: Mutex::new(HashMap::new()), mfa: Mutex::new(HashMap::new()), secrets }
+        Self { clients: Mutex::new(HashMap::new()), mfa: Mutex::new(HashMap::new()), browser: Mutex::new(HashMap::new()), secrets, templates: std::sync::Mutex::new(None) }
     }
     fn cookie_key(id: &str) -> String {
         format!("flexi:{id}:cookie")
     }
     fn password_key(id: &str) -> String {
         format!("flexi:{id}:password")
+    }
+}
+
+/// O S3 pode responder `binary/octet-stream`; descobre o tipo pela assinatura do arquivo.
+fn sniff_image_mime(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [b'G', b'I', b'F', ..] => "image/gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        _ => "image/jpeg",
     }
 }
 
@@ -55,7 +68,7 @@ fn truncate(v: &Value) -> String {
 }
 
 impl RuntimeService {
-    async fn flexi_client(&self, conn: &AppConnection) -> DotsResult<FlexiClient> {
+    pub(crate) async fn flexi_client(&self, conn: &AppConnection) -> DotsResult<FlexiClient> {
         if let Some(c) = self.flexi.clients.lock().await.get(&conn.id) {
             return Ok(c.clone());
         }
@@ -164,7 +177,7 @@ impl RuntimeService {
         }
     }
 
-    async fn flexi_relogin(&self, conn: &AppConnection, client: FlexiClient) -> DotsResult<AppConnection> {
+    pub(crate) async fn flexi_relogin(&self, conn: &AppConnection, client: FlexiClient) -> DotsResult<AppConnection> {
         if conn.remember_password {
             if let Some(pw) = self.flexi.secrets.get(&FlexiRegistry::password_key(&conn.id)) {
                 match client.login(&conn.email, &pw, conn.server.as_deref()).await {
@@ -191,6 +204,75 @@ impl RuntimeService {
         self.storage.call({ let id = conn.id.clone(); move |s| s.apps().get(&id) }).await
     }
 
+    /// "Logar com Flexi": cria o pedido no Flexi; a interface abre `authorize_url` no navegador.
+    pub async fn flexi_browser_login_start(&self, base_url: Option<String>) -> DotsResult<Value> {
+        let base_url = base_url.filter(|u| !u.trim().is_empty()).unwrap_or_else(|| DEFAULT_BASE_URL.into());
+        let client = FlexiClient::new(&base_url).map_err(|e| DotsError::Validation(e.to_string()))?;
+        let challenge = client.start_browser_login("dots").await.map_err(|e| DotsError::Engine(e.to_string()))?;
+        self.flexi.browser.lock().await.insert(challenge.token.clone(), client);
+        Ok(json!(challenge))
+    }
+
+    /// Acompanha o pedido. Autorizado: cria (ou atualiza, pelo e-mail) a conexao com a sessao recebida.
+    pub async fn flexi_browser_login_poll(&self, token: &str) -> DotsResult<Value> {
+        let Some(client) = self.flexi.browser.lock().await.get(token).cloned() else {
+            return Ok(json!({ "status": "not_found" }));
+        };
+        match client.poll_browser_login(token).await.map_err(|e| DotsError::Engine(e.to_string()))? {
+            BrowserLoginPoll::Pending => Ok(json!({ "status": "pending" })),
+            BrowserLoginPoll::Closed(status) => {
+                self.flexi.browser.lock().await.remove(token);
+                Ok(json!({ "status": status }))
+            }
+            BrowserLoginPoll::Authenticated => {
+                self.flexi.browser.lock().await.remove(token);
+                let info = client.me().await.map_err(|e| DotsError::Engine(e.to_string()))?;
+                let email = info.email.clone().unwrap_or_default().trim().to_lowercase();
+                if email.is_empty() {
+                    return Err(DotsError::Engine("o Flexi nao informou o e-mail do usuario".into()));
+                }
+                let base_url = client.base_url().as_str().trim_end_matches('/').to_string();
+                let (bu, em) = (base_url.clone(), email.clone());
+                let conn = self
+                    .storage
+                    .call(move |s| {
+                        let existing = s.apps().list(Some(KIND))?.into_iter().find(|c| c.base_url == bu && c.email.eq_ignore_ascii_case(&em));
+                        match existing {
+                            Some(c) => Ok(c),
+                            None => s.apps().create(KIND, &format!("Flexi ({em})"), &bu, None, &em, ConnectionStatus::NeedsLogin, false),
+                        }
+                    })
+                    .await?;
+                self.flexi.mfa.lock().await.remove(&conn.id);
+                self.flexi.clients.lock().await.insert(conn.id.clone(), client.clone());
+                let c = self.flexi_store_session(&conn.id, &client, &info).await?;
+                self.audit("app.flexi.connect", "app_connection", Some(&c.id), json!({ "email": email, "user": info.nome, "browser": true })).await?;
+                self.events.emit("apps.changed", json!({ "id": c.id, "status": "connected" }));
+                Ok(json!({ "status": "authenticated", "connection": c }))
+            }
+        }
+    }
+
+    /// Para de acompanhar um pedido (o usuario cancelou no app).
+    pub async fn flexi_browser_login_cancel(&self, token: &str) {
+        self.flexi.browser.lock().await.remove(token);
+    }
+
+    /// Foto de perfil do usuario da conexao, como data URL (`null` se ele nao tiver foto).
+    pub async fn flexi_profile_photo(&self, id: &str) -> DotsResult<Value> {
+        use base64::Engine as _;
+        let conn = self.storage.call({ let id = id.to_string(); move |s| s.apps().get(&id) }).await?;
+        let client = self.flexi_client(&conn).await?;
+        match client.profile_photo().await {
+            Ok(Some((mime, bytes))) => {
+                let mime = if mime.starts_with("image/") { mime } else { sniff_image_mime(&bytes).to_string() };
+                Ok(json!({ "data_url": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)) }))
+            }
+            Ok(None) => Ok(json!({ "data_url": null })),
+            Err(e) => Err(DotsError::Engine(e.to_string())),
+        }
+    }
+
     pub async fn flexi_remove(&self, id: &str) -> DotsResult<()> {
         if let Some(c) = self.flexi.clients.lock().await.remove(id) {
             c.logout().await;
@@ -206,6 +288,19 @@ impl RuntimeService {
     }
 
     /// Conexao Flexi usada por um DOT (vinculo explicito ou a unica existente).
+    /// Se `url` e do Flexi deste DOT, coloca o cookie de sessao no navegador dele: a pagina abre logada.
+    pub async fn browser_login_for_app(&self, dot_id: &str, browser: &crate::browser::Browser, url: &str) -> DotsResult<bool> {
+        let Some(conn) = self.flexi_connection_for_dot(dot_id).await? else { return Ok(false) };
+        let host = crate::policy::url_host(&conn.base_url);
+        let target = crate::policy::url_host(url);
+        if host.is_empty() || !(target == host || target.ends_with(&format!(".{host}"))) {
+            return Ok(false);
+        }
+        let Some(cookie) = self.flexi.secrets.get(&FlexiRegistry::cookie_key(&conn.id)) else { return Ok(false) };
+        browser.set_cookie("userdata", &cookie, &conn.base_url).await?;
+        Ok(true)
+    }
+
     pub async fn flexi_connection_for_dot(&self, dot_id: &str) -> DotsResult<Option<AppConnection>> {
         let d = dot_id.to_string();
         self.storage
@@ -276,6 +371,7 @@ pub const FLEXI_CONTEXT: &str = "Mapa do Flexi (ferramentas flexi_*):\n\
 - Marketplaces por numero: 0 Mercado Livre, 1 Shopee, 2 Google Shopping. Um 'anuncio' e a publicacao de um produto em um marketplace; filtre e crie sempre informando o numero do marketplace.\n\
 - Google tem DUAS coisas distintas no Flexi: (a) o anuncio no Google Shopping (marketplace 2) e o item do catalogo enviado ao Google Merchant Center, visivel na aba Anuncios > Google Shopping do produto; (b) a campanha do Google Ads (flexi_ads_*) e a midia que divulga os itens que JA estao no Merchant Center. Para um produto aparecer no Google, primeiro ele precisa de anuncio publicado no Google Shopping; so depois uma campanha (Shopping ou Performance Max) o divulga. 'Criar anuncio no Google Shopping' nao e 'criar campanha no Google Ads'.\n\
 - Anuncio no Google Shopping: liste os existentes com flexi_anuncios (marketplace 2); a conta vem de flexi_google_merchant_contas (use a conta cujo id e o proprio customer_id, que e a conta Google Ads cadastrada no Flexi); crie com flexi_criar_anuncio e dados {produto_id, marketplace: 2, marketplace_conta_id: \"<id da conta, so digitos>\", quantidade_anuncios: 1} (o Google NAO passa por flexi_preparar_criacao); envie ao Merchant Center com flexi_publicar_anuncio (pede permissao). Produtos sem anuncio no Google Shopping sao os que nao aparecem em flexi_anuncios com marketplace 2 para aquele produto_id.\n\
-- Campanhas do Google Ads: flexi_ads_dashboard, flexi_ads_produtos e flexi_ads_series mostram desempenho; flexi_ads_publicar_produtos cria uma campanha nova com o Merchant Center inteiro da conta (nao seleciona produtos por id).";
+- Campanhas do Google Ads: flexi_ads_dashboard, flexi_ads_produtos e flexi_ads_series mostram desempenho; flexi_ads_publicar_produtos cria uma campanha nova com o Merchant Center inteiro da conta (nao seleciona produtos por id).\n\
+- Para ver uma tela do Flexi como o usuario ve (ex.: a aba Anuncios > Google Shopping de um produto, em /produtos/<id>), use dots_browser_open com a URL do Flexi: o navegador do DOT ja abre logado e o usuario acompanha no painel Computador. Acoes que so existem na tela (ex.: Excluir anuncio, no menu de um anuncio) voce faz clicando com dots_browser_click. Nunca use ferramentas de computador ou navegador do proprio assistente.";
 
 pub const PRICE_RULES_SUMMARY: &str = "Regras de preco do Flexi: consulte flexi_precos_calculados antes de qualquer alteracao; nunca defina preco abaixo de preco_minimo; respeite taxas e frete calculados; alteracoes de preco em lote exigem aprovacao do usuario; registre o motivo de cada alteracao na resposta.";

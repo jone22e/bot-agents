@@ -22,6 +22,12 @@ def arg(flag):
 session = arg("--session-id") or arg("--resume") or "fake-session"
 prompt = sys.stdin.read().strip()
 sysprompt = arg("--append-system-prompt") or ""
+# O runtime anexa ao pedido um bloco <contexto_da_tarefa> (memorias, checkpoint, retomada). Separa para os
+# comandos de teste (DELEGATE:, RUNCMD:...) nao casarem com texto de memorias de tarefas anteriores.
+taskctx = ""
+if "<contexto_da_tarefa>" in prompt:
+    prompt, taskctx = prompt.split("<contexto_da_tarefa>", 1)
+    prompt = prompt.strip()
 
 def emit(o):
     sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
@@ -61,6 +67,12 @@ if 'dots_answer_question(question_id="' in prompt:
     ok, out = Gateway().call("dots_answer_question", {"question_id": qid, "answer": "SQLite"})
     tool("dots_answer_question", {"question_id": qid}, ok, out)
     final = "RESPONDI" if ok else "FALHOU: " + out
+elif 'dots_decide_approval(approval_id="' in prompt:
+    # gerente decidindo o pedido de permissao de um funcionario
+    aid = prompt.split('dots_decide_approval(approval_id="', 1)[1].split('"', 1)[0]
+    ok, out = Gateway().call("dots_decide_approval", {"approval_id": aid, "approved": True, "reason": "dentro do pedido"})
+    tool("dots_decide_approval", {"approval_id": aid}, ok, out)
+    final = "DECIDI" if ok else "FALHOU: " + out
 elif prompt.startswith("Continuacao:"):
     final = "CONSOLIDADO: " + str(prompt.count("Resultado:")) + " resultado(s)" + (" | resposta=" + prompt.split("Resposta: ",1)[1].split("\n")[0] if "Resposta: " in prompt else "")
 elif prompt.startswith("DELEGATE:"):
@@ -84,7 +96,7 @@ elif prompt.startswith("RUNCMD:"):
     tool("dots_run_command", {"command": cmd}, ok, out)
     if out.startswith("[ja executado"):
         final = "REPLAYED"
-    elif "Retomada (tentativa" in sysprompt:
+    elif "Retomada (tentativa" in taskctx:
         final = "RETOMADO_SEM_REPLAY"
     else:
         time.sleep(30); final = "ACORDEI"
@@ -93,6 +105,17 @@ elif prompt.startswith("BROWSE:"):
     ok, out = Gateway().call("dots_browser_open", {"url": url})
     tool("dots_browser_open", {"url": url}, ok, out)
     final = ("PAGINA " if ok else "FALHOU ") + out[:1500]
+elif prompt.startswith("CLICK:"):
+    # CLICK:<url>|<rotulo>: abre a pagina, acha o [ref=N] da linha com o rotulo e clica nele
+    url, label = prompt.split(":", 1)[1].split("|", 1)
+    g = Gateway()
+    ok, page = g.call("dots_browser_open", {"url": url})
+    tool("dots_browser_open", {"url": url}, ok, page)
+    line = next((l for l in page.splitlines() if label in l), "")
+    ref = int(line.split("[ref=")[1].split("]")[0]) if "[ref=" in line else 0
+    ok, out = g.call("dots_browser_click", {"ref": ref})
+    tool("dots_browser_click", {"ref": ref}, ok, out)
+    final = ("CLICOU " if ok else "FALHOU ") + out[:1500]
 elif prompt.startswith("FLEXI:"):
     _, name, raw = prompt.split(":", 2)
     targs = json.loads(raw or "{}")
@@ -115,6 +138,11 @@ elif prompt.startswith("DENY:"):
     ok, out = Gateway().call("dots_write_file", {"path": path, "content": "x"})
     tool("dots_write_file", {"path": path, "content": "x"}, ok, out)
     final = "ESCREVEU" if ok else "NEGADO"
+elif prompt.startswith("RESUME:"):
+    # gerente retomando a tarefa parada de um funcionario
+    ok, out = Gateway().call("dots_resume_delegation", {"id": prompt.split(":", 1)[1]})
+    tool("dots_resume_delegation", {}, ok, out)
+    final = "RETOMEI" if ok else "FALHOU: " + out
 elif prompt.startswith("SLEEP:"):
     time.sleep(float(prompt.split(":", 1)[1])); final = "ACORDEI"
 elif prompt.startswith("RECALL:"):
@@ -123,6 +151,8 @@ elif prompt.startswith("RECALL:"):
     final = out
 elif prompt.startswith("ECHO_SYSTEM"):
     final = sysprompt[:300]
+elif prompt.startswith("ECHO_CONTEXT"):
+    final = taskctx[:600]
 
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": final}]}})
 emit({"type": "result", "subtype": "success", "is_error": False, "result": final, "session_id": session, "total_cost_usd": 0.001, "usage": {"input_tokens": 1, "output_tokens": 1}, "permission_denials": []})
