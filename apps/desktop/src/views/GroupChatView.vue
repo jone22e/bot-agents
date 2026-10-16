@@ -13,11 +13,13 @@ import { toneOf } from "@/lib/heartbeat";
 import { useContactsStore } from "@/stores/contacts";
 import { useGroupStore } from "@/stores/group";
 import { useRuntimeStore } from "@/stores/runtime";
+import { useTeamsStore } from "@/stores/teams";
 
 const router = useRouter();
 const group = useGroupStore();
 const contacts = useContactsStore();
 const runtime = useRuntimeStore();
+const teams = useTeamsStore();
 const draft = ref("");
 const thread = ref<HTMLElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
@@ -46,10 +48,11 @@ const rows = computed<Row[]>(() => {
 });
 const mentionsOf = (g: GroupMessage) => ((g.metadata as { mentions?: { name: string }[] } | null)?.mentions ?? []).map((m) => m.name);
 const titleOf = (dotId: string | null) => (dotId ? contacts.byDot(dotId)?.title ?? null : null);
+const teamOf = (dotId: string | null) => (dotId ? teams.managedBy(dotId)?.name ?? teams.memberOf(dotId)?.name ?? null : null);
 const working = computed(() => group.members.filter((d) => contacts.byDot(d.id)?.state === "busy"));
 
 async function load() {
-  if (runtime.isConnected) await group.load();
+  if (runtime.isConnected) await Promise.all([group.load(), teams.load()]);
 }
 onMounted(() => {
   group.open = true;
@@ -159,6 +162,7 @@ function autosize() {
         <button v-for="d in group.members" :key="d.id" class="flex items-center gap-1.5 rounded-full border border-zinc-800 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800" :title="`Abrir a conversa com ${d.name}`" @click="router.push(`/chat/${d.id}`)">
           <Avatar :name="d.name" size="sm" :state="contacts.byDot(d.id)?.state" />
           <span class="max-w-[160px] truncate">{{ d.name }}</span>
+          <span v-if="teamOf(d.id)" class="max-w-[160px] truncate text-zinc-500">· {{ teamOf(d.id) }}</span>
           <Heartbeat v-if="toneOf(contacts.byDot(d.id)?.pulse ?? 'idle') !== 'idle'" :tone="toneOf(contacts.byDot(d.id)?.pulse ?? 'idle')" />
         </button>
       </div>
@@ -179,6 +183,7 @@ function autosize() {
             <Avatar :name="r.g.dot_name ?? '?'" size="sm" />
             <strong>{{ r.g.dot_name }}</strong>
             <span v-if="titleOf(r.g.dot_id)" class="ellipsis">{{ titleOf(r.g.dot_id) }}</span>
+            <span v-if="teamOf(r.g.dot_id)" class="ellipsis">· Equipe {{ teamOf(r.g.dot_id) }}</span>
           </button>
           <ChatBubble :message="r.m" />
         </div>
@@ -193,6 +198,7 @@ function autosize() {
           <Avatar :name="d.name" size="sm" />
           <strong>{{ d.name }}</strong>
           <span v-if="titleOf(d.id)" class="ellipsis">{{ titleOf(d.id) }}</span>
+          <span v-if="teamOf(d.id)" class="ellipsis">· Equipe {{ teamOf(d.id) }}</span>
         </li>
       </ul>
       <textarea
