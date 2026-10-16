@@ -101,6 +101,7 @@ export function describeApproval(a: Approval): string {
     case "git": return `quer executar git ${s("op")} ${((i.args as string[]) ?? []).join(" ")}`.trim();
     case "Edit": case "Write": case "MultiEdit": return `quer editar o arquivo ${fileName(s("file_path"))}`;
     case "WebFetch": case "WebSearch": return `quer acessar a internet (${s("url") || s("query")})`;
+    case "browser_open": return `quer acessar ${res} no navegador`;
     case "dismiss_employee": return `quer demitir ${s("dot")} (ele sera excluido; depois o gerente contrata outro). Motivo: ${s("reason")}`;
     default: return a.summary;
   }

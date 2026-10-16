@@ -13,6 +13,7 @@ describe("humanize", () => {
   });
   it("describes approvals", () => {
     expect(describeApproval({ tool: "dots_write_file", resources: ["/w/f.txt"], input: {}, summary: "s" } as never)).toBe("quer escrever o arquivo f.txt");
+    expect(describeApproval({ tool: "dots_browser_open", resources: ["mercadolivre.com.br"], input: { url: "https://mercadolivre.com.br" }, summary: "s" } as never)).toBe("quer acessar mercadolivre.com.br no navegador");
   });
   it("computes dot state line", () => {
     expect(dotStateLine([]).text).toBe("Livre");

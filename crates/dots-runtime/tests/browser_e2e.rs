@@ -155,23 +155,57 @@ async fn each_dot_gets_its_own_browser_profile() {
     let text = done.result_text.clone().unwrap_or_default();
     assert!(text.starts_with("CLICOU Pagina: clicou"), "{text}");
 
-    // DOT B: rede desabilitada -> negado pela politica, sem navegador e sem perfil.
+    // DOT B: rede geral desabilitada -> pede permissao para o dominio antes de abrir.
     let b = mk("Navegador B").await;
     call(&client, "policies.set", json!({ "dot_id": b.id, "patch": { "auto_approve_level": "exec" } })).await;
     let task: Task = serde_json::from_value(call(&client, "tasks.create", json!({ "dot_id": b.id, "prompt": format!("BROWSE:{url}") })).await).unwrap();
+    let start = Instant::now();
+    let pending = loop {
+        let list: Vec<Approval> = serde_json::from_value(call(&client, "approvals.list", json!({ "pending_only": true })).await).unwrap();
+        if let Some(ap) = list.into_iter().find(|x| x.task_id == task.id) { break ap; }
+        assert!(start.elapsed() < Duration::from_secs(60), "site externo deveria pedir permissao");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(pending.tool, "dots_browser_open");
+    assert_eq!(pending.risk, RiskLevel::Exec);
+    assert_eq!(pending.resources, vec!["127.0.0.1"]);
+    call(&client, "approvals.decide", json!({ "id": pending.id, "approved": false })).await;
     let done = wait_task(&client, &task.id, Duration::from_secs(60)).await;
     let text = done.result_text.clone().unwrap_or_default();
-    assert!(text.starts_with("FALHOU NEGADO pela politica"), "{text}");
+    assert!(text.starts_with("FALHOU NEGADO: o usuario nao aprovou acesso"), "{text}");
     assert!(!dir.path().join("browsers").join(&b.id).exists(), "DOT B nao deve ter perfil");
+
+    let task: Task = serde_json::from_value(call(&client, "tasks.create", json!({ "dot_id": b.id, "prompt": format!("BROWSE:{url}") })).await).unwrap();
+    let start = Instant::now();
+    let pending = loop {
+        let list: Vec<Approval> = serde_json::from_value(call(&client, "approvals.list", json!({ "pending_only": true })).await).unwrap();
+        if let Some(ap) = list.into_iter().find(|x| x.task_id == task.id) { break ap; }
+        assert!(start.elapsed() < Duration::from_secs(60), "segunda tentativa deveria pedir permissao");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    call(&client, "approvals.decide", json!({ "id": pending.id, "approved": true })).await;
+    let done = wait_task(&client, &task.id, Duration::from_secs(60)).await;
+    assert!(done.result_text.unwrap_or_default().starts_with("PAGINA Pagina: Loja Spike"));
+    let policy: ToolPolicy = serde_json::from_value(call(&client, "policies.get", json!({ "dot_id": b.id })).await).unwrap();
+    assert!(!policy.allow_network, "aprovar dominio nao libera a rede geral");
+
+    let task: Task = serde_json::from_value(call(&client, "tasks.create", json!({ "dot_id": b.id, "prompt": format!("BROWSE:{url}") })).await).unwrap();
+    let done = wait_task(&client, &task.id, Duration::from_secs(60)).await;
+    assert!(done.result_text.unwrap_or_default().starts_with("PAGINA Pagina: Loja Spike"), "dominio aprendido deve abrir sem novo pedido");
+    let approvals: Vec<Approval> = serde_json::from_value(call(&client, "approvals.list", json!({ "pending_only": false })).await).unwrap();
+    assert_eq!(approvals.iter().filter(|x| x.dot_id == b.id).count(), 2);
 
     // Auditoria registrou a chamada do DOT A.
     let audit: Vec<AuditLog> = serde_json::from_value(call(&client, "audit.list", json!({ "limit": 100 })).await).unwrap();
     assert!(audit.iter().any(|x| x.action == "tool.dots_browser_open" && x.details["outcome"] == "ok" && x.actor == format!("dot:{}", a.id)));
-    assert!(audit.iter().any(|x| x.action == "tool.dots_browser_open" && x.details["outcome"] == "denied" && x.actor == format!("dot:{}", b.id)));
+    assert!(audit.iter().any(|x| x.action == "tool.dots_browser_open" && x.details["outcome"] == "rejected" && x.actor == format!("dot:{}", b.id)));
 
-    // Excluir o DOT A fecha o navegador e remove o perfil.
+    // Excluir os DOTs fecha os navegadores e remove os perfis.
     call(&client, "dots.delete", json!({ "id": a.id })).await;
+    let profile_b = dir.path().join("browsers").join(&b.id);
+    call(&client, "dots.delete", json!({ "id": b.id })).await;
     assert!(!profile_a.exists(), "perfil removido ao excluir o DOT");
+    assert!(!profile_b.exists(), "perfil B removido ao excluir o DOT");
 
     unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     let _ = child.wait();

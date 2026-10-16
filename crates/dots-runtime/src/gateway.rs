@@ -43,7 +43,41 @@ impl RuntimeService {
                 return Ok(ToolOutput::err(format!("NEGADO: {msg}")));
             }
         }
-        let decision = ctx.evaluate(tool, &args);
+        // Sem rede geral, um site externo no navegador pode ser liberado pelo usuario para este dominio.
+        // A permissao aprendida nao se aplica a comandos ou ferramentas nativas de rede.
+        let browser_host = if !ctx.policy.allow_network && (tool == "dots_browser_open" || BROWSER_ACTIONS.contains(&tool)) {
+            let url = args.get(if tool == "dots_browser_open" { "url" } else { "_page_url" }).and_then(Value::as_str).unwrap_or("");
+            let host = crate::policy::url_host(url);
+            if (url.starts_with("http://") || url.starts_with("https://"))
+                && !host.is_empty()
+                && !ctx.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+                Some(host)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let browser_grant = if let Some(host) = &browser_host {
+            let (dot_id, key) = (ctx.dot_id.clone(), format!("dots_browser_open|{host}"));
+            let learned = self.storage.call(move |st| st.learned().has(&dot_id, &key)).await?;
+            if !learned && tool == "dots_browser_open" {
+                if let Some(msg) = self.manager_does_work(&ctx, tool, RiskLevel::Exec).await {
+                    self.audit_tool(&ctx, tool, &args, "denied", &msg).await;
+                    return Ok(ToolOutput::err(format!("NEGADO: {msg}")));
+                }
+                let summary = format!("acessar {host} no navegador deste DOT");
+                let (approved, reason) = self.request_approval(&ctx, tool, &args, RiskLevel::Exec, &[host.clone()], &summary).await?;
+                if !approved {
+                    self.audit_tool(&ctx, tool, &args, "rejected", &summary).await;
+                    return Ok(ToolOutput::err(format!("NEGADO: o usuario nao aprovou acesso a {host}.{} Nao tente contornar; prossiga sem ele ou explique o bloqueio.", said(&reason))));
+                }
+            }
+            learned || tool == "dots_browser_open"
+        } else {
+            false
+        };
+        let decision = if browser_grant { ctx.evaluate_with_network(tool, &args, true) } else { ctx.evaluate(tool, &args) };
         if let Decision::Allow { risk, .. } | Decision::NeedsApproval { risk, .. } = &decision {
             if let Some(msg) = self.manager_does_work(&ctx, tool, *risk).await {
                 self.audit_tool(&ctx, tool, &args, "denied", &msg).await;
@@ -56,7 +90,7 @@ impl RuntimeService {
                 return Ok(ToolOutput::err(format!("NEGADO pela politica do DOTS: {reason}")));
             }
             Decision::Allow { risk, resources, summary } => (risk, resources, summary),
-            Decision::NeedsApproval { risk, resources, summary } if self.already_learned(&ctx, tool, &args).await => {
+            Decision::NeedsApproval { risk, resources, summary } if (browser_grant && tool == "dots_browser_open") || self.already_learned(&ctx, tool, &args).await => {
                 self.audit_tool(&ctx, tool, &args, "learned", &summary).await;
                 (risk, resources, summary)
             }
@@ -184,7 +218,11 @@ impl RuntimeService {
         self.events.emit("approval.requested", json!(approval));
         let _ = ctx.events.send(ExecutionEvent::PermissionRequested { approval_id: approval.id.clone(), tool: tool.to_string(), risk }).await;
         // Em pedido delegado, quem decide e o gerente (o usuario continua podendo decidir pela interface).
-        let routed = self.route_approval_to_manager(ctx, &approval).await;
+        let routed = if tool == "dots_browser_open" && !ctx.policy.allow_network {
+            false
+        } else {
+            self.route_approval_to_manager(ctx, &approval).await
+        };
         tracing::info!(approval = %approval.id, tool, risk = risk.as_str(), routed_to_manager = routed, "aguardando aprovacao");
 
         let approved = match tokio::time::timeout(Duration::from_secs(ttl.max(1) as u64), rx).await {

@@ -225,7 +225,12 @@ impl ExecutionContext {
 
     /// Avalia uma chamada de ferramenta do gateway.
     pub fn evaluate(&self, tool: &str, input: &Value) -> Decision {
-        let (risk, resources, summary) = match self.classify(tool, input) {
+        self.evaluate_with_network(tool, input, self.policy.allow_network)
+    }
+
+    /// Considera uma permissao de navegador para o dominio atual, sem liberar rede para outras ferramentas.
+    pub fn evaluate_with_network(&self, tool: &str, input: &Value, browser_network_allowed: bool) -> Decision {
+        let (risk, resources, summary) = match self.classify(tool, input, browser_network_allowed) {
             Ok(x) => x,
             Err(e) => return Decision::Deny(e.message().to_string()),
         };
@@ -239,7 +244,7 @@ impl ExecutionContext {
         }
     }
 
-    fn classify(&self, tool: &str, input: &Value) -> DotsResult<(RiskLevel, Vec<String>, String)> {
+    fn classify(&self, tool: &str, input: &Value, browser_network_allowed: bool) -> DotsResult<(RiskLevel, Vec<String>, String)> {
         let s = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         if let Some(ft) = tool.strip_prefix("flexi_").and_then(|_| dots_flexi::find_tool(tool)) {
             let risk = crate::flexi::risk_of(ft);
@@ -326,8 +331,8 @@ impl ExecutionContext {
                 if !host.is_empty() && self.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
                     return Ok((RiskLevel::Read, vec![url.clone()], format!("abrir no app conectado: {}", url.chars().take(100).collect::<String>())));
                 }
-                if !self.policy.allow_network {
-                    return Err(DotsError::Unauthorized("acesso a rede desabilitado para este DOT: o navegador so abre os apps conectados (ex.: Flexi); outros sites exigem liberar a internet em Permissoes".into()));
+                if !browser_network_allowed {
+                    return Err(DotsError::Unauthorized("acesso a rede desabilitado para este DOT: sites externos exigem permissao do usuario".into()));
                 }
                 Ok((RiskLevel::Exec, vec![url.clone()], format!("abrir no navegador: {}", url.chars().take(100).collect::<String>())))
             }
@@ -339,7 +344,7 @@ impl ExecutionContext {
                     return Err(DotsError::Validation("o navegador do DOT nao tem pagina aberta: use dots_browser_open antes".into()));
                 }
                 let on_app = !host.is_empty() && self.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}")));
-                if !on_app && !self.policy.allow_network {
+                if !on_app && !browser_network_allowed {
                     return Err(DotsError::Unauthorized(format!("a pagina atual ({host}) nao e de um app conectado e o acesso a rede esta desabilitado para este DOT")));
                 }
                 let place = url.split(['?', '#']).next().unwrap_or("").trim_start_matches("https://").trim_start_matches("http://").chars().take(100).collect::<String>();
@@ -516,6 +521,9 @@ mod tests {
         assert!(matches!(c2.evaluate_native("WebFetch", &serde_json::json!({"url": "http://x"})), Decision::Deny(_)));
         // navegador: exige rede liberada; risco Exec; so http/https
         assert!(matches!(c2.evaluate("dots_browser_open", &serde_json::json!({"url": "https://x"})), Decision::Deny(_)), "rede desabilitada");
+        assert!(matches!(c2.evaluate_with_network("dots_browser_open", &serde_json::json!({"url": "https://x"}), true), Decision::Allow { risk: RiskLevel::Exec, .. }), "dominio aprovado so libera o navegador");
+        assert!(matches!(c2.evaluate_with_network("dots_browser_open", &serde_json::json!({"url": "file:///etc/passwd"}), true), Decision::Deny(_)));
+        assert!(matches!(c2.evaluate_with_network("dots_run_command", &serde_json::json!({"command": "npm install"}), true), Decision::Deny(_)), "dominio aprovado nao libera comandos de rede");
         // app conectado: permitido sem rede liberada, risco de leitura (inclusive subdominio)
         assert!(matches!(c2.evaluate("dots_browser_open", &serde_json::json!({"url": "https://flexi.exemplo.com/produtos/1"})), Decision::Allow { risk: RiskLevel::Read, .. }));
         assert!(matches!(c2.evaluate("dots_browser_open", &serde_json::json!({"url": "https://api.flexi.exemplo.com/"})), Decision::Allow { risk: RiskLevel::Read, .. }));
