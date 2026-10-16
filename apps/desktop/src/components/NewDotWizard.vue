@@ -8,29 +8,32 @@ import { api, RuntimeError } from "@/api";
 import { ENGINE_LABEL, splitPurpose } from "@/lib/humanize";
 import { randomName } from "@/lib/names";
 import { TRUST_OPTIONS } from "@/lib/templates";
-import { useAppsStore } from "@/stores/apps";
+import { AGENTS_CONNECTION, useAppsStore } from "@/stores/apps";
 import { useDotsStore } from "@/stores/dots";
 import { useEnginesStore } from "@/stores/engines";
+import { useSettingsStore } from "@/stores/settings";
 import { useTeamsStore } from "@/stores/teams";
 
 const router = useRouter();
 const dots = useDotsStore();
 const engines = useEnginesStore();
 const apps = useAppsStore();
+const settings = useSettingsStore();
 const teams = useTeamsStore();
 type Step = 1 | 2 | 3;
 const step = ref<Step>(1);
 const saving = ref(false);
 const error = ref<string | null>(null);
-const form = reactive({ name: "", purpose: "", trust: "read" as "read" | "write" | "exec", engine: "" as EngineKind | "", tipo: "funcionario" as "funcionario" | "gerente", teamId: "", newTeamName: "" });
+const form = reactive({ name: "", purpose: "", trust: "read" as "read" | "write" | "exec", engine: "" as EngineKind | "", tipo: "gerente" as "funcionario" | "gerente", teamId: "", newTeamName: "" });
 /** Sorteia um nome comum que nenhum DOT usa. */
 const genName = () => (form.name = randomName(dots.items.map((d) => d.name), form.name));
 const showEngine = ref(false);
 const showTrust = ref(false);
 /** Papel do Flexi escolhido no passo 2 (preenche nome e descricao; vai para o Flexi como template_id). */
 const picked = ref<FlexiRoleTemplate | null>(null);
+const agentFlexi = computed(() => apps.flexi.find((c) => c.id === settings.items[AGENTS_CONNECTION] && c.status === "connected") ?? null);
 /** Especialidades do Flexi: sempre de gerente (o gerente contrata os funcionarios e define o que cada um faz). */
-const flexiRoles = computed<FlexiRoleTemplate[]>(() => (apps.flexiConnected && form.tipo === "gerente" ? apps.templates.filter((t) => t.role === "supervisor") : []));
+const flexiRoles = computed<FlexiRoleTemplate[]>(() => (agentFlexi.value && form.tipo === "gerente" ? apps.templates.filter((t) => t.role === "supervisor") : []));
 function pickRole(t: FlexiRoleTemplate) {
   picked.value = t;
   form.name = t.name;
@@ -56,6 +59,8 @@ const avatarCls = (id: string) => SOFT[[...id].reduce((n, c) => n + c.charCodeAt
 const dotName = (id: string | null | undefined) => (id ? dots.items.find((d) => d.id === id)?.name ?? "?" : null);
 /** Equipes que um gerente novo pode assumir: as que ainda nao tem gerente. */
 const openTeams = computed(() => teams.withoutManager);
+const managedTeams = computed(() => teams.items.filter((t) => !!t.manager_dot_id));
+const selectedManagerTeam = computed(() => managedTeams.value.find((t) => t.id === form.teamId) ?? null);
 /** Resumo da escolha de equipe para o passo final. */
 const teamSummary = computed(() => {
   if (form.tipo === "gerente") {
@@ -63,22 +68,26 @@ const teamSummary = computed(() => {
     if (form.newTeamName.trim()) return `Gerente da nova equipe ${form.newTeamName.trim()}`;
     return "Gerente sem equipe ainda";
   }
-  const t = form.teamId ? teams.byId(form.teamId) : null;
-  if (!t) return "Sem equipe por enquanto";
+  const t = selectedManagerTeam.value;
+  if (!t) return "Escolha um gerente";
   const m = dotName(t.manager_dot_id);
-  return m ? `Funcionario de ${m} (equipe ${t.name})` : `Funcionario da equipe ${t.name} (ainda sem gerente)`;
+  return `Funcionario de ${m} (equipe ${t.name})`;
 });
 
 onMounted(async () => {
   if (engines.items.length === 0) await engines.load();
   if (!form.engine && ready.value[0]) form.engine = ready.value[0].kind;
   await Promise.all([apps.load(), teams.load(), dots.items.length ? Promise.resolve() : dots.load()]);
-  if (apps.flexiConnected) await apps.loadTemplates();
+  if (agentFlexi.value) await apps.loadTemplates();
 });
 
 function next() {
   error.value = null;
   if (step.value === 1) {
+    if (form.tipo === "funcionario" && !selectedManagerTeam.value) {
+      error.value = "Escolha uma equipe com gerente para criar um funcionário.";
+      return;
+    }
     // Trocou tipo ou setor: o papel escolhido antes pode nao valer mais.
     if (picked.value && !flexiRoles.value.some((t) => t.id === picked.value!.id)) picked.value = null;
     step.value = 2;
@@ -89,16 +98,28 @@ function next() {
   }
 }
 async function create() {
+  if (form.tipo === "funcionario" && !selectedManagerTeam.value) {
+    step.value = 1;
+    error.value = "Escolha uma equipe com gerente para criar um funcionário.";
+    return;
+  }
   saving.value = true;
   error.value = null;
   try {
+    if (form.tipo === "funcionario") {
+      teams.items = await api.teams.list();
+      if (!selectedManagerTeam.value) {
+        step.value = 1;
+        error.value = "O gerente desta equipe mudou. Escolha uma equipe com gerente para continuar.";
+        return;
+      }
+    }
     const { objective, instructions } = splitPurpose(form.purpose);
     const d = await dots.create({ name: form.name.trim(), description: "", objective, instructions, primary_engine: form.engine || null, model: null, workspace_path: null, limits: null, role: form.tipo === "gerente" ? "supervisor" : "worker" });
     await api.policies.set(d.id, { auto_approve_level: form.trust });
-    const flexi = apps.flexi.find((c) => c.status === "connected");
     // Liga o DOT ao Flexi; gerente com especialidade leva o setor dela.
-    if (apps.flexiConnected && flexi) await api.apps.assignRole(d.id, flexi.id, { template_id: picked.value?.id ?? null, group: picked.value?.group ?? null, role: form.tipo === "gerente" ? "supervisor" : "worker" });
-    // Equipe: gerente assume uma equipe sem gerente ou cria uma nova; funcionario entra na equipe escolhida.
+    if (agentFlexi.value) await api.apps.assignRole(d.id, agentFlexi.value.id, { template_id: picked.value?.id ?? null, group: picked.value?.group ?? null, role: form.tipo === "gerente" ? "supervisor" : "worker" });
+    // Equipe: gerente assume uma equipe sem gerente ou cria uma nova; funcionario entra na equipe do gerente escolhido.
     if (form.tipo === "gerente") {
       if (form.teamId) await api.teams.setManager(form.teamId, d.id);
       else if (form.newTeamName.trim()) await api.teams.create({ name: form.newTeamName.trim(), description: "", manager_dot_id: d.id, member_ids: [] });
@@ -106,6 +127,13 @@ async function create() {
       await api.teams.addMember(form.teamId, d.id);
     }
     await teams.load();
+    // O DOT ja tem politica, integracao e equipe; agora pode receber a primeira tarefa.
+    try {
+      await api.dots.startAutonomy(d.id);
+    } catch (e) {
+      // A verificacao periodica do runtime tenta novamente; o DOT ja foi criado.
+      console.warn("Não foi possível iniciar o DOT agora:", e);
+    }
     router.replace(`/chat/${d.id}`);
   } catch (e) {
     error.value = e instanceof RuntimeError ? e.message : String(e);
@@ -131,7 +159,7 @@ async function create() {
           <h1 class="text-[28px] font-semibold tracking-tight text-zinc-50">Seu novo DOT é gerente ou funcionário?</h1>
           <p class="mt-1.5 text-sm text-zinc-400">Primeiro o papel dele, depois o setor.</p>
           <div class="mt-7 grid grid-cols-2 gap-3">
-            <button v-for="o in TIPOS" :key="o.id" class="rounded-2xl border p-4 text-left transition-colors" :class="form.tipo === o.id ? 'border-violet-500 bg-violet-500/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'" @click="form.tipo = o.id; form.teamId = ''">
+            <button v-for="o in TIPOS" :key="o.id" class="rounded-2xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40" :class="form.tipo === o.id ? 'border-violet-500 bg-violet-500/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'" :disabled="o.id === 'funcionario' && !managedTeams.length" @click="form.tipo = o.id; form.teamId = ''">
               <span class="flex items-start justify-between">
                 <span class="flex h-9 w-9 items-center justify-center rounded-lg" :class="form.tipo === o.id ? 'bg-violet-500/20 text-violet-300' : 'bg-zinc-800 text-zinc-400'"><component :is="o.icon" :size="16" /></span>
                 <span class="radio" :class="{ on: form.tipo === o.id }" />
@@ -140,6 +168,7 @@ async function create() {
               <span class="mt-1 block text-[13px] leading-relaxed text-zinc-400">{{ o.text }}</span>
             </button>
           </div>
+          <p v-if="!teams.loading && !managedTeams.length" class="mt-3 text-sm text-zinc-400">Crie um gerente vinculado a uma equipe antes de criar funcionários.</p>
 
           <template v-if="form.tipo === 'gerente'">
             <p class="mb-2 mt-7 text-[13px] font-semibold text-zinc-300">Gerente do quê?</p>
@@ -162,24 +191,18 @@ async function create() {
           <template v-else>
             <p class="mb-2 mt-7 text-[13px] font-semibold text-zinc-300">Funcionário de quem?</p>
             <div class="divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
-              <label v-for="t in teams.items" :key="t.id" class="row" :class="{ on: form.teamId === t.id }">
+              <label v-for="t in managedTeams" :key="t.id" class="row" :class="{ on: form.teamId === t.id }">
                 <input v-model="form.teamId" type="radio" :value="t.id" class="sr-only" />
-                <span v-if="t.manager_dot_id" class="avatar" :class="avatarCls(t.manager_dot_id)">{{ (dotName(t.manager_dot_id) ?? "?").charAt(0).toUpperCase() }}</span>
-                <span v-else class="avatar border border-zinc-700 text-zinc-500">–</span>
-                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">{{ dotName(t.manager_dot_id) ?? "Sem gerente ainda" }}</span><span class="block text-xs text-zinc-500">Equipe {{ t.name }}{{ t.member_ids.length ? ` · ${t.member_ids.length} ${t.member_ids.length === 1 ? "funcionário" : "funcionários"}` : "" }}</span></span>
+                <span class="avatar" :class="avatarCls(t.manager_dot_id)">{{ (dotName(t.manager_dot_id) ?? "?").charAt(0).toUpperCase() }}</span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">{{ dotName(t.manager_dot_id) }}</span><span class="block text-xs text-zinc-500">Equipe {{ t.name }}{{ t.member_ids.length ? ` · ${t.member_ids.length} ${t.member_ids.length === 1 ? "funcionário" : "funcionários"}` : "" }}</span></span>
                 <span class="radio" :class="{ on: form.teamId === t.id }" />
               </label>
-              <label class="row" :class="{ on: form.teamId === '' }">
-                <input v-model="form.teamId" type="radio" value="" class="sr-only" />
-                <span class="avatar border border-zinc-700 text-zinc-500">–</span>
-                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">Sem equipe por enquanto</span><span class="block text-xs text-zinc-500">Você escolhe depois em Equipes</span></span>
-                <span class="radio" :class="{ on: form.teamId === '' }" />
-              </label>
             </div>
+            <p v-if="!selectedManagerTeam" class="mt-2 text-xs text-zinc-400">Selecione o gerente responsável por este funcionário.</p>
           </template>
           <div class="mt-10 flex items-center justify-between">
             <button class="text-[13px] font-medium text-zinc-400 hover:text-zinc-200" @click="router.back()">Cancelar</button>
-            <button class="flex h-11 items-center gap-2 rounded-xl bg-violet-500 px-5 text-sm font-semibold text-white hover:bg-violet-400" @click="next">Continuar <ArrowRight :size="15" /></button>
+            <button class="flex h-11 items-center gap-2 rounded-xl bg-violet-500 px-5 text-sm font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40" :disabled="form.tipo === 'funcionario' && !selectedManagerTeam" @click="next">Continuar <ArrowRight :size="15" /></button>
           </div>
         </template>
 
@@ -214,7 +237,7 @@ async function create() {
 
         <!-- Passo 3: confirmar -->
         <template v-else>
-          <div class="flex items-center gap-3"><Avatar :name="form.name" size="lg" /><div><h1 class="text-2xl font-semibold text-zinc-50">{{ form.name }}</h1><p class="text-sm text-zinc-400">Pronto para conversar.</p></div></div>
+          <div class="flex items-center gap-3"><Avatar :name="form.name" size="lg" /><div><h1 class="text-2xl font-semibold text-zinc-50">{{ form.name }}</h1><p class="text-sm text-zinc-400">{{ ready.length ? "Começa a trabalhar automaticamente após a criação." : "Começa automaticamente quando um assistente estiver pronto." }}</p></div></div>
           <div class="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
             <p class="text-xs font-medium uppercase tracking-wide text-zinc-500">O que ele faz</p>
             <textarea v-model="form.purpose" class="mt-1 w-full resize-none bg-transparent text-sm leading-relaxed text-zinc-200 focus:outline-none" rows="4"></textarea>
@@ -230,7 +253,7 @@ async function create() {
               <span class="text-zinc-300">{{ teamSummary }}</span>
               <button class="text-xs text-indigo-400 hover:underline" @click="step = 1">mudar</button>
             </div>
-            <template v-if="apps.flexiConnected">
+            <template v-if="agentFlexi">
               <div class="rounded-xl bg-zinc-900/60 px-4 py-3">
                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500">No Flexi</p>
                 <div class="mt-2 space-y-1">
@@ -246,12 +269,13 @@ async function create() {
               <div v-if="showTrust" class="space-y-1 px-1">
                 <label v-for="o in TRUST_OPTIONS" :key="o.value" class="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-zinc-900"><input v-model="form.trust" type="radio" :value="o.value" class="mt-1" /><span><span class="block text-sm text-zinc-200">{{ o.title }}</span><span class="block text-xs text-zinc-500">{{ o.description }}</span></span></label>
               </div>
+              <p v-if="apps.flexi.length" class="px-1 text-xs text-amber-300">Sem acesso ao Flexi: escolha e conecte a conta dos agentes em <router-link to="/engines" class="underline">Conectar aplicativos</router-link>.</p>
             </template>
             <p class="px-1 text-xs text-zinc-500">Pastas, gatilhos, equipe e memoria ficam no perfil dele, pelo nome no topo da conversa.</p>
           </div>
           <div class="mt-6 flex justify-end gap-2">
             <button class="btn-secondary h-11" @click="step = 2">Voltar</button>
-            <button class="btn-primary h-11 px-6" :disabled="saving || !form.name.trim() || !form.purpose.trim()" @click="create">{{ saving ? "Criando..." : "Criar e conversar" }}</button>
+            <button class="btn-primary h-11 px-6" :disabled="saving || !form.name.trim() || !form.purpose.trim()" @click="create">{{ saving ? "Criando..." : "Criar e iniciar" }}</button>
           </div>
         </template>
       </div>
