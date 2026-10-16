@@ -4,6 +4,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", name: "home", component: () => import("@/views/ChatView.vue"), meta: { title: "DOTS" } },
+    { path: "/group", name: "group", component: () => import("@/views/GroupChatView.vue"), meta: { title: "Grupo geral" } },
     { path: "/chat/:dotId", name: "chat", component: () => import("@/views/ChatView.vue"), meta: { title: "Conversa" } },
     { path: "/dots/new", name: "dot-new", component: () => import("@/views/DotEditorView.vue"), meta: { title: "Novo DOT" } },
     { path: "/dots/:id/edit", name: "dot-edit", component: () => import("@/views/DotEditorView.vue"), meta: { title: "Editar DOT" } },
