@@ -2,7 +2,37 @@
 
 :root {
   color-scheme: dark;
+  /* Cores do ovrgit (tema escuro): usadas pela conversa, pelo batimento e pelos temas (lib/themes.ts sobrescreve). */
+  --accent: #a974f8;
+  --accent-strong: #9459f0;
+  --accent-soft: rgba(169, 116, 248, 0.18);
+  --on-accent: #ffffff;
+  --bg: #1e1e1e;
+  --panel: #242424;
+  --panel-2: #2c2c2c;
+  --hover: #333333;
+  --border: #3a3a3a;
+  --text: #e5e5e5;
+  --muted: #a1a1a1;
+  --faint: #6e6e6e;
+  --add: #32d74b;
+  --add-bg: rgba(50, 215, 75, 0.14);
+  --del: #ff453a;
+  --del-bg: rgba(255, 69, 58, 0.15);
+  --mod: #ff9f0a;
+  --hunk: #b4a4ff;
+  --hunk-bg: rgba(169, 116, 248, 0.1);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  /* fundo da lista de contatos (entre o fundo e o painel) */
+  --sidebar: #161616;
 }
+
+/* Tema Terminal: fonte mono e sem cantos arredondados (os avatares e os aneis continuam redondos). */
+:root[data-theme="terminal"] body { font-family: var(--mono); }
+:root[data-theme="terminal"] {
+  --radius-xs: 0; --radius-sm: 0; --radius-md: 0; --radius-lg: 0; --radius-xl: 0; --radius-2xl: 0; --radius-3xl: 0;
+}
+:root[data-theme="terminal"] .card, :root[data-theme="terminal"] .input, :root[data-theme="terminal"] .pop, :root[data-theme="terminal"] .btn-primary, :root[data-theme="terminal"] .btn-secondary, :root[data-theme="terminal"] .btn-danger, :root[data-theme="terminal"] .btn-ghost { border-radius: 0; }
 
 html, body, #app {
   height: 100%;
@@ -33,3 +63,47 @@ input, textarea, select { -webkit-user-select: text; user-select: text; }
   .card { @apply rounded-lg border border-zinc-800 bg-zinc-900/60 p-4; }
   .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
 }
+
+/* Conversa (ChatView e grupo geral): medidas do ovrgit; as cores (--accent, --bg, --panel...) vem do :root e mudam com o tema */
+.chat {
+  --agent-size: 14px;
+  background: var(--bg) linear-gradient(180deg, color-mix(in srgb, var(--bg) 99%, var(--text)), var(--bg));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.chat button { font: inherit; color: inherit; cursor: pointer; }
+.chat button:disabled { opacity: 0.45; cursor: default; }
+.chat .mono { font-family: var(--mono); }
+.chat .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat .spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: chat-spin 0.7s linear infinite; flex: none; }
+.chat .spinner.tiny { width: 11px; height: 11px; border-width: 1.5px; }
+@keyframes chat-spin { to { transform: rotate(360deg); } }
+.chat ::-webkit-scrollbar { width: 10px; height: 10px; }
+.chat ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+
+.chat .md { user-select: text; line-height: 1.6; font-size: var(--agent-size); min-width: 0; overflow-wrap: anywhere; }
+.chat .md p { margin: 0 0 10px; }
+.chat .md p:last-child { margin-bottom: 0; }
+.chat .md ul, .chat .md ol { margin: 0 0 10px; padding-left: 22px; }
+.chat .md ul { list-style: disc; }
+.chat .md ol { list-style: decimal; }
+.chat .md li { margin: 3px 0; }
+.chat .md h1, .chat .md h2, .chat .md h3 { margin: 12px 0 6px; font-size: calc(var(--agent-size) + 1px); font-weight: 600; }
+.chat .md strong { font-weight: 600; }
+.chat .md code { font-family: var(--mono); font-size: calc(var(--agent-size) - 1.5px); background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+.chat .md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat .md pre code { background: transparent; padding: 0; }
+.chat .md .code-wrap { position: relative; }
+.chat .md .code-wrap .copy { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 6px; border: 1px solid transparent; background: var(--panel-2); color: var(--faint); opacity: 0; transition: opacity 0.12s, color 0.12s; }
+.chat .md .code-wrap:hover .copy, .chat .md .code-wrap .copy:focus-visible, .chat .md .code-wrap .copy.done { opacity: 1; }
+.chat .md .code-wrap .copy:hover { color: var(--text); border-color: var(--border); }
+.chat .md .code-wrap .copy svg:last-child { display: none; }
+.chat .md .code-wrap .copy.done { color: var(--add); }
+.chat .md .code-wrap .copy.done svg:first-child { display: none; }
+.chat .md .code-wrap .copy.done svg:last-child { display: block; }
+.chat .md a { color: var(--accent); text-decoration: underline; cursor: pointer; }
+.chat .md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: calc(var(--agent-size) - 1px); }
+.chat .md td, .chat .md th { border: 1px solid var(--border); padding: 4px 8px; }
+.chat .md blockquote { margin: 0 0 10px; padding-left: 10px; border-left: 3px solid var(--border); color: var(--muted); }
+.chat .md hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
