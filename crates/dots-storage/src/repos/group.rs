@@ -10,6 +10,37 @@ pub struct GroupRepo<'a> {
     conn: &'a mut Connection,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replies_follow_delivery_order_instead_of_start_order() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE group_messages (id TEXT, content TEXT, metadata_json TEXT, created_at TEXT);
+             CREATE TABLE messages (id TEXT, content TEXT, task_id TEXT, metadata_json TEXT, created_at TEXT, role TEXT, execution_id TEXT);
+             CREATE TABLE tasks (id TEXT, dot_id TEXT, origin TEXT, correlation_id TEXT);
+             CREATE TABLE dots (id TEXT, name TEXT);
+             CREATE TABLE executions (id TEXT, finished_at TEXT);
+             INSERT INTO dots VALUES ('a', 'Ana');
+             INSERT INTO tasks VALUES ('t1', 'a', 'group:u1', NULL);
+             INSERT INTO tasks VALUES ('t2', 'a', 'group:u2', NULL);
+             INSERT INTO group_messages VALUES ('u1', 'primeira', '{}', '2026-10-16T10:00:00.000Z');
+             INSERT INTO group_messages VALUES ('u2', 'segunda', '{}', '2026-10-16T10:00:03.000Z');
+             INSERT INTO executions VALUES ('e1', '2026-10-16T10:00:05.000Z');
+             INSERT INTO executions VALUES ('e2', '2026-10-16T10:00:04.000Z');
+             INSERT INTO messages VALUES ('r1', 'resposta lenta', 't1', '{}', '2026-10-16T10:00:01.000Z', 'dot', 'e1');
+             INSERT INTO messages VALUES ('r2', 'resposta rapida', 't2', '{}', '2026-10-16T10:00:03.500Z', 'dot', 'e2');",
+        )
+        .unwrap();
+
+        let messages = GroupRepo::new(&mut conn).messages(20).unwrap();
+        assert_eq!(messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u1", "u2", "r2", "r1"]);
+        assert_eq!(messages[3].created_at.to_rfc3339(), "2026-10-16T10:00:05+00:00");
+    }
+}
+
 /// Prefixo da origem das tarefas criadas por uma mensagem do grupo (`group:<id da mensagem>`).
 pub const GROUP_ORIGIN_PREFIX: &str = "group:";
 
@@ -46,11 +77,12 @@ impl<'a> GroupRepo<'a> {
             let mut stmt = self
                 .conn
                 .prepare(
-                    "SELECT m.id, m.content, m.task_id, m.metadata_json, m.created_at, t.dot_id, d.name
+                    "SELECT m.id, m.content, m.task_id, m.metadata_json, COALESCE(e.finished_at, m.created_at), t.dot_id, d.name
                      FROM messages m JOIN tasks t ON t.id = m.task_id JOIN dots d ON d.id = t.dot_id
+                     LEFT JOIN executions e ON e.id = m.execution_id
                      WHERE m.role = 'dot' AND (t.origin LIKE 'group:%'
                         OR (t.origin LIKE 'followup:%' AND t.correlation_id IN (SELECT g.id FROM tasks g WHERE g.origin LIKE 'group:%' AND g.dot_id = t.dot_id)))
-                     ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?1",
+                     ORDER BY COALESCE(e.finished_at, m.created_at) DESC, m.rowid DESC LIMIT ?1",
                 )
                 .map_err(storage_err)?;
             let rows = stmt
@@ -63,7 +95,7 @@ impl<'a> GroupRepo<'a> {
                 out.push(GroupMessage { id, role: MessageRole::Dot, content, dot_id: Some(dot_id), dot_name: Some(dot_name), task_id, metadata: json_or_default(meta), created_at: parse_ts(&created_at)? });
             }
         }
-        out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
         let skip = out.len().saturating_sub(limit as usize);
         Ok(out.split_off(skip))
     }
