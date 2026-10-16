@@ -46,7 +46,12 @@ export function describeToolCall(name: string, input: unknown): string {
     case "git": return `Usou git (${s("op") || a("op")})`;
     case "system_info": return "Consultou informacoes do sistema";
     case "remember": return "Guardou uma memoria";
+    case "schedule_create": { const k = s("kind") || a("kind"), sp = s("spec") || a("spec"); return `Agendou ${k === "every" ? `a cada ${sp} min` : k === "daily" ? `todo dia às ${sp}` : k === "weekly" ? `toda semana (${sp})` : `cron ${sp}`}`; }
+    case "schedule_list": return "Consultou os agendamentos";
+    case "schedule_cancel": return "Cancelou um agendamento";
     case "recall": return `Procurou na memoria por "${s("query") || a("query")}"`;
+    case "dismiss_employee": return `Demitiu ${s("dot") || a("dot")}: ${s("reason") || a("reason")}`;
+    case "hire_employee": return `Contratou ${s("name") || a("name")} como ${s("role") || a("role")}`;
     case "command_execution": return `Rodou o comando "${s("command")}"`;
     case "file_change": return "Alterou arquivos";
     case "Bash": return `Rodou o comando "${s("command")}"`;
@@ -96,6 +101,7 @@ export function describeApproval(a: Approval): string {
     case "git": return `quer executar git ${s("op")} ${((i.args as string[]) ?? []).join(" ")}`.trim();
     case "Edit": case "Write": case "MultiEdit": return `quer editar o arquivo ${fileName(s("file_path"))}`;
     case "WebFetch": case "WebSearch": return `quer acessar a internet (${s("url") || s("query")})`;
+    case "dismiss_employee": return `quer demitir ${s("dot")} (ele sera excluido; depois o gerente contrata outro). Motivo: ${s("reason")}`;
     default: return a.summary;
   }
 }

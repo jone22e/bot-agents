@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Building2, KeyRound, Link2, RefreshCw, ShieldCheck, Trash2, Users } from "lucide-vue-next";
+import { Building2, Globe, Plus, RefreshCw, ShieldCheck, Trash2, Users } from "lucide-vue-next";
 import flexiIcon from "@/assets/flexi-icon.svg";
 import type { AppConnection } from "@dots/shared-types";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import ErrorBanner from "@/components/ErrorBanner.vue";
+import FlexiBrowserLogin from "@/components/FlexiBrowserLogin.vue";
 import Toggle from "@/components/Toggle.vue";
 import { useAppsStore } from "@/stores/apps";
 
@@ -20,7 +21,9 @@ const teamFor = ref<AppConnection | null>(null);
 
 onMounted(() => apps.load());
 const statusLabel = computed(() => (c: AppConnection) => ({ connected: "Conectado", needs_login: "Precisa entrar de novo", mfa_pending: "Aguardando codigo 2FA", error: "Com problema" }[c.status]));
-const statusCls = computed(() => (c: AppConnection) => ({ connected: "bg-emerald-500/15 text-emerald-300", needs_login: "bg-amber-500/15 text-amber-300", mfa_pending: "bg-amber-500/25 text-amber-200", error: "bg-red-500/15 text-red-300" }[c.status]));
+const statusCls = computed(() => (c: AppConnection) => ({ connected: "bg-emerald-500/10 text-emerald-400", needs_login: "bg-amber-500/10 text-amber-300", mfa_pending: "bg-amber-500/15 text-amber-200", error: "bg-red-500/10 text-red-300" }[c.status]));
+const dotCls = computed(() => (c: AppConnection) => ({ connected: "bg-emerald-400", needs_login: "bg-amber-400", mfa_pending: "bg-amber-300", error: "bg-red-400" }[c.status]));
+const displayName = (c: AppConnection) => c.user_name ?? c.email;
 
 async function connect() {
   if (!form.email.trim() || !form.senha) return;
@@ -38,65 +41,79 @@ async function createTeam() {
 </script>
 
 <template>
-  <div class="card">
-    <div class="flex items-start justify-between gap-4">
-      <div class="flex items-start gap-3">
-        <img :src="flexiIcon" alt="" class="h-10 w-10 shrink-0" />
-        <div>
-          <h3 class="text-sm font-semibold text-zinc-100">Flexi</h3>
-          <p class="text-xs text-zinc-500">Deixa os DOTs trabalharem com anuncios, perguntas, analises e Google Ads do Flexi, no nome do usuario que voce escolher. A empresa e a base vem da conta desse usuario, como no login do Flexi.</p>
+  <div class="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
+    <div class="flex items-start gap-4 p-5">
+      <img :src="flexiIcon" alt="" class="h-11 w-11 shrink-0 rounded-xl" />
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">
+          <h3 class="text-base font-semibold text-zinc-100">Flexi</h3>
+          <span v-if="apps.flexi.length" class="rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400">{{ apps.flexi.length }} {{ apps.flexi.length === 1 ? "usuário" : "usuários" }}</span>
         </div>
+        <p class="mt-1 max-w-3xl text-[13px] leading-relaxed text-zinc-400">Deixa os DOTs trabalharem com anúncios, perguntas, análises e Google Ads do Flexi, no nome do usuário que você escolher. A empresa e a base vêm da conta desse usuário, como no login do Flexi.</p>
       </div>
-      <button class="btn-primary" @click="showForm = !showForm">{{ apps.flexi.length ? "Conectar outro usuario" : "Conectar" }}</button>
     </div>
-    <ErrorBanner :message="apps.error" />
+    <div v-if="apps.error" class="px-5 pb-4"><ErrorBanner :message="apps.error" /></div>
 
-    <div v-if="showForm" class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-      <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">E-mail do usuario</label><input v-model="form.email" class="input" type="email" placeholder="pode ser outro usuario, nao o seu" /></div>
-        <div><label class="label">Senha</label><input v-model="form.senha" class="input" type="password" @keyup.enter="connect" /></div>
-        <div class="col-span-2"><label class="label">Nome desta conexao (opcional)</label><input v-model="form.label" class="input" placeholder="ex.: Flexi · Maria (marketplaces)" /></div>
-      </div>
-      <div class="mt-3 space-y-2">
-        <Toggle v-model="form.remember_password" label="Guardar a senha no Keychain do Mac para reconectar sozinho" description="A sessao do Flexi expira em um ou dois dias. Sem a senha guardada, voce precisa entrar de novo a cada expiracao. O codigo 2FA sempre e pedido a voce." />
-        <details class="text-xs" @toggle="form.advanced = ($event.target as HTMLDetailsElement).open"><summary class="cursor-pointer text-zinc-500 hover:text-zinc-300">Avancado</summary>
-          <label class="label mt-2">Endereco do Flexi</label><input v-model="form.base_url" class="input font-mono text-xs" placeholder="https://flexi.c2s-business.com (padrao) ou http://127.0.0.1:2012" />
-        </details>
-      </div>
-      <div class="mt-3 flex justify-end gap-2"><button class="btn-secondary" @click="showForm = false">Cancelar</button><button class="btn-primary" :disabled="apps.busy || !form.email.trim() || !form.senha" @click="connect">{{ apps.busy ? "Entrando..." : "Entrar no Flexi" }}</button></div>
-    </div>
-
-    <ul v-if="apps.flexi.length" class="mt-4 divide-y divide-zinc-800">
-      <li v-for="c in apps.flexi" :key="c.id" class="py-3">
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <p class="truncate text-sm font-medium text-zinc-100">{{ c.label }}</p>
-            <p class="flex flex-wrap items-center gap-x-3 text-xs text-zinc-500">
-              <span class="flex items-center gap-1"><KeyRound :size="12" /> {{ c.user_name ?? c.email }}</span>
-              <span v-if="c.empresa" class="flex items-center gap-1"><Building2 :size="12" /> {{ c.empresa }}</span>
-              <span class="flex items-center gap-1"><Link2 :size="12" /> {{ c.base_url.replace(/^https?:\/\//, '') }}</span>
-              <span v-if="c.remember_password" class="flex items-center gap-1"><ShieldCheck :size="12" /> reconecta sozinho</span>
-            </p>
-            <p v-if="c.status_detail && c.status !== 'connected'" class="mt-0.5 text-xs text-amber-300">{{ c.status_detail }}</p>
+    <ul v-if="apps.flexi.length" class="divide-y divide-zinc-800 border-t border-zinc-800">
+      <li v-for="c in apps.flexi" :key="c.id" class="px-5 py-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-3">
+            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-500/20 text-sm font-semibold text-violet-300">{{ displayName(c).charAt(0).toUpperCase() }}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <p class="truncate text-sm font-semibold text-zinc-100" :title="`${c.label} · ${c.email}`">{{ displayName(c) }}</p>
+                <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="statusCls(c)"><span class="h-1.5 w-1.5 rounded-full" :class="dotCls(c)"></span>{{ statusLabel(c) }}</span>
+              </div>
+              <p class="mt-0.5 flex flex-wrap items-center gap-x-4 text-xs text-zinc-500">
+                <span v-if="c.empresa" class="flex items-center gap-1"><Building2 :size="12" /> {{ c.empresa }}</span>
+                <span class="flex items-center gap-1 font-mono"><Globe :size="12" /> {{ c.base_url.replace(/^https?:\/\//, '') }}</span>
+                <span v-if="c.remember_password" class="flex items-center gap-1"><ShieldCheck :size="12" /> Reconecta sozinho</span>
+              </p>
+              <p v-if="c.status_detail && c.status !== 'connected'" class="mt-0.5 text-xs text-amber-300">{{ c.status_detail }}</p>
+            </div>
           </div>
           <div class="flex shrink-0 items-center gap-2">
-            <span class="badge" :class="statusCls(c)">{{ statusLabel(c) }}</span>
-            <button class="btn-ghost" title="Verificar sessao" :disabled="apps.busy" @click="apps.check(c.id)"><RefreshCw :size="14" /></button>
-            <button class="btn-ghost" title="Montar equipe de marketplaces" :disabled="apps.busy || c.status !== 'connected'" @click="teamFor = c"><Users :size="14" /></button>
-            <button class="btn-ghost text-red-300" title="Remover" @click="toRemove = c"><Trash2 :size="14" /></button>
+            <button class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50" title="Verificar a sessão e reconectar com a senha guardada" :disabled="apps.busy" @click="apps.check(c.id)"><RefreshCw :size="13" /> Reconectar</button>
+            <button class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50" title="Montar equipe de marketplaces" :disabled="apps.busy || c.status !== 'connected'" @click="teamFor = c"><Users :size="14" /></button>
+            <button class="flex h-8 w-8 items-center justify-center rounded-lg border border-red-900/60 text-red-400 hover:bg-red-500/10" title="Remover" @click="toRemove = c"><Trash2 :size="14" /></button>
           </div>
         </div>
-        <div v-if="c.status === 'mfa_pending'" class="mt-2 flex items-center gap-2">
-          <input v-model="mfaCode[c.id]" class="input w-40" placeholder="codigo 2FA" maxlength="8" @keyup.enter="apps.mfa(c.id, mfaCode[c.id] ?? '')" />
+        <div v-if="c.status === 'mfa_pending'" class="ml-12 mt-2 flex items-center gap-2">
+          <input v-model="mfaCode[c.id]" class="input w-40" placeholder="código 2FA" maxlength="8" @keyup.enter="apps.mfa(c.id, mfaCode[c.id] ?? '')" />
           <button class="btn-primary" :disabled="apps.busy || !(mfaCode[c.id] ?? '').trim()" @click="apps.mfa(c.id, mfaCode[c.id] ?? '')">Confirmar</button>
         </div>
-        <div v-else-if="c.status !== 'connected'" class="mt-2 flex items-center gap-2">
+        <div v-else-if="c.status !== 'connected'" class="ml-12 mt-2 flex items-center gap-2">
           <input v-model="reauth[c.id]" class="input w-56" type="password" placeholder="senha para entrar de novo" @keyup.enter="apps.reconnect(c.id, reauth[c.id])" />
           <button class="btn-primary" :disabled="apps.busy" @click="apps.reconnect(c.id, reauth[c.id])">Entrar de novo</button>
+          <span class="text-xs text-zinc-500">ou use Logar com Flexi, abaixo</span>
         </div>
       </li>
     </ul>
-    <p v-else-if="!showForm" class="mt-3 text-xs text-zinc-500">Nenhuma conexao ainda. Ao conectar, os modelos de DOT para marketplaces ficam disponiveis.</p>
+
+    <div class="border-t border-zinc-800 px-5 py-3.5">
+      <div v-if="showForm" class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">E-mail do usuário</label><input v-model="form.email" class="input" type="email" placeholder="pode ser outro usuário, não o seu" /></div>
+          <div><label class="label">Senha</label><input v-model="form.senha" class="input" type="password" @keyup.enter="connect" /></div>
+          <div class="col-span-2"><label class="label">Nome desta conexão (opcional)</label><input v-model="form.label" class="input" placeholder="ex.: Flexi · Maria (marketplaces)" /></div>
+        </div>
+        <div class="mt-3 space-y-2">
+          <Toggle v-model="form.remember_password" label="Guardar a senha no Keychain do Mac para reconectar sozinho" description="A sessão do Flexi expira em um ou dois dias. Sem a senha guardada, você precisa entrar de novo a cada expiração. O código 2FA sempre é pedido a você." />
+          <details class="text-xs" @toggle="form.advanced = ($event.target as HTMLDetailsElement).open"><summary class="cursor-pointer text-zinc-500 hover:text-zinc-300">Avançado</summary>
+            <label class="label mt-2">Endereço do Flexi</label><input v-model="form.base_url" class="input font-mono text-xs" placeholder="https://flexi.c2s-business.com (padrão) ou http://127.0.0.1:2012" />
+          </details>
+        </div>
+        <div class="mt-3 flex justify-end gap-2"><button class="btn-secondary" @click="showForm = false">Cancelar</button><button class="btn-primary" :disabled="apps.busy || !form.email.trim() || !form.senha" @click="connect">{{ apps.busy ? "Entrando..." : "Entrar no Flexi" }}</button></div>
+      </div>
+      <template v-else>
+        <p v-if="!apps.flexi.length" class="mb-3 text-xs text-zinc-500">Nenhuma conexão ainda. Ao conectar, os modelos de DOT para marketplaces ficam disponíveis.</p>
+        <div class="mb-3">
+          <FlexiBrowserLogin :base-url="form.advanced && form.base_url ? form.base_url : null" />
+          <p v-if="!apps.browserLogin" class="mt-1.5 text-xs text-zinc-500">Abre o Flexi no navegador, onde você já está logado, e liga a sua conta ao app. Se a sessão expirar, use de novo.</p>
+        </div>
+        <button class="inline-flex items-center gap-2 rounded-lg border border-dashed border-violet-500/50 bg-violet-500/10 px-4 py-2 text-[13px] font-medium text-violet-300 hover:bg-violet-500/15" @click="showForm = true"><Plus :size="14" /> {{ apps.flexi.length ? "Conectar outro usuário" : "Conectar usuário" }}</button>
+      </template>
+    </div>
 
     <ConfirmDialog :open="toRemove !== null" title="Remover conexao com o Flexi" :message="`Remover “${toRemove?.label ?? ''}”? Os DOTs ligados a ela perdem o acesso ao Flexi. A senha e a sessao guardadas sao apagadas do Keychain.`" confirm-label="Remover" danger @confirm="apps.remove(toRemove!.id); toRemove = null" @cancel="toRemove = null" />
     <ConfirmDialog :open="teamFor !== null" title="Montar equipe de marketplaces" message="Cria 11 DOTs prontos (Gerente de Marketplaces, subgerentes e agentes de Mercado Livre, Shopee, Google Ads e Publicacao), ligados a esta conexao e com a delegacao configurada. Todos comecam no nivel 'so le e pergunta antes de mudar'. Voce pode renomear, ajustar ou excluir depois." confirm-label="Montar equipe" @confirm="createTeam" @cancel="teamFor = null" />

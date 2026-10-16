@@ -50,7 +50,7 @@ export const useChatStore = defineStore("chat", {
       try { this.messages = await api.conversations.messages(this.conversationId); } catch { /* mantem */ }
     },
     async send(content: string, attachments: string[] = []) {
-      if (!this.conversationId || !content.trim()) return;
+      if (!this.conversationId || (!content.trim() && !attachments.length)) return;
       this.sending = true;
       this.error = null;
       try {

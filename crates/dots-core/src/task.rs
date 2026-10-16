@@ -228,6 +228,10 @@ pub enum ExecutionEvent {
         #[ts(type = "number | null")]
         output_tokens: Option<u64>,
         cost_usd: Option<f64>,
+        /// Tamanho do contexto na ultima chamada ao modelo (entrada + cache), quando o motor informa.
+        #[serde(default)]
+        #[ts(type = "number | null")]
+        context_tokens: Option<u64>,
     },
     Notice { level: String, text: String },
     Completed { result_text: String },

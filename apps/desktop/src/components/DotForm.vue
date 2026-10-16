@@ -4,6 +4,9 @@ import type { Dot, DotCreate, DotLimits, DotUpdate, EngineKind } from "@dots/sha
 import { ENGINE_LABEL, splitPurpose } from "@/lib/humanize";
 import { DOT_TEMPLATES, TRUST_OPTIONS, type DotTemplate } from "@/lib/templates";
 import { useEnginesStore } from "@/stores/engines";
+import { useDotsStore } from "@/stores/dots";
+import { Dices } from "lucide-vue-next";
+import { randomName } from "@/lib/names";
 import ModelPicker from "@/components/ModelPicker.vue";
 import { modelLabel } from "@/lib/models";
 
@@ -11,6 +14,9 @@ const props = defineProps<{ dot?: Dot | null; saving: boolean }>();
 const emit = defineEmits<{ create: [input: DotCreate, trust: "read" | "write" | "exec"]; update: [patch: DotUpdate]; cancel: [] }>();
 
 const engines = useEnginesStore();
+const dots = useDotsStore();
+/** Sorteia um nome comum que nenhum outro DOT usa. */
+const genName = () => (form.name = randomName(dots.items.filter((d) => d.id !== props.dot?.id).map((d) => d.name), form.name));
 const ready = computed(() => engines.items.filter((e) => e.enabled && e.last_detection?.installed && e.last_detection.auth_status !== "unauthenticated"));
 const defaultLimits: DotLimits = { max_execution_seconds: 1800, max_concurrent_tasks: 1, max_tokens_per_task: null, max_cost_usd_per_task: null };
 
@@ -71,7 +77,10 @@ function submit() {
 
     <div>
       <label class="label" for="name">Nome</label>
-      <input id="name" v-model="form.name" class="input" maxlength="80" placeholder="Ex.: Revisor de codigo" required />
+      <div class="flex gap-2">
+        <input id="name" v-model="form.name" class="input" maxlength="80" placeholder="Ex.: Ana" required />
+        <button type="button" class="btn-secondary shrink-0" title="Gerar um nome comum" @click="genName"><Dices :size="15" /> Gerar nome</button>
+      </div>
     </div>
 
     <div>

@@ -35,6 +35,9 @@ pub struct Contact {
     /// Cargo: nome do papel de origem (ex.: "Gerente de Google Ads"); nulo para DOTs sem papel.
     #[serde(default)]
     pub title: Option<String>,
+    /// Batimento na lista de contatos: live (trabalhando) | waiting (espera alguem) | standby (na fila) | error (ultimo trabalho falhou) | idle.
+    #[serde(default)]
+    pub pulse: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -76,6 +79,23 @@ pub struct Message {
     pub content: String,
     pub task_id: Option<String>,
     pub execution_id: Option<String>,
+    #[ts(type = "unknown")]
+    pub metadata: serde_json::Value,
+    pub created_at: Timestamp,
+}
+
+/// Mensagem do grupo geral (o usuario com todos os gerentes): a do usuario ou a resposta de um gerente.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GroupMessage {
+    pub id: String,
+    /// user | dot
+    pub role: MessageRole,
+    pub content: String,
+    /// Gerente que respondeu (nulo na mensagem do usuario).
+    pub dot_id: Option<String>,
+    pub dot_name: Option<String>,
+    pub task_id: Option<String>,
     #[ts(type = "unknown")]
     pub metadata: serde_json::Value,
     pub created_at: Timestamp,

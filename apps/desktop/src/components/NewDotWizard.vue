@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeft, Check, UserRound, Users } from "lucide-vue-next";
+import { ArrowLeft, ArrowRight, Check, Dices, UserRound, Users } from "lucide-vue-next";
 import type { EngineKind, FlexiRoleTemplate } from "@dots/shared-types";
 import Avatar from "@/components/Avatar.vue";
 import { api, RuntimeError } from "@/api";
 import { ENGINE_LABEL, splitPurpose } from "@/lib/humanize";
+import { randomName } from "@/lib/names";
 import { TRUST_OPTIONS } from "@/lib/templates";
 import { useAppsStore } from "@/stores/apps";
 import { useDotsStore } from "@/stores/dots";
@@ -22,40 +23,14 @@ const step = ref<Step>(1);
 const saving = ref(false);
 const error = ref<string | null>(null);
 const form = reactive({ name: "", purpose: "", trust: "read" as "read" | "write" | "exec", engine: "" as EngineKind | "", tipo: "funcionario" as "funcionario" | "gerente", teamId: "", newTeamName: "" });
+/** Sorteia um nome comum que nenhum DOT usa. */
+const genName = () => (form.name = randomName(dots.items.map((d) => d.name), form.name));
 const showEngine = ref(false);
 const showTrust = ref(false);
 /** Papel do Flexi escolhido no passo 2 (preenche nome e descricao; vai para o Flexi como template_id). */
 const picked = ref<FlexiRoleTemplate | null>(null);
-/** Nome do setor escolhido no passo 1: equipe existente ou a nova. */
-const sectorName = computed(() => (form.teamId ? teams.byId(form.teamId)?.name ?? "" : form.newTeamName).trim().toLowerCase());
-/** Setores do Flexi (grupos dos papeis). "Google" junta Google Shopping e Google Ads. */
-const SECTORS: { id: string; label: string; groups: string[]; keys: string[] }[] = [
-  { id: "mercadolivre", label: "Mercado Livre", groups: ["mercadolivre"], keys: ["mercado", "ml"] },
-  { id: "shopee", label: "Shopee", groups: ["shopee"], keys: ["shopee"] },
-  { id: "google", label: "Google", groups: ["googleads", "publicacao"], keys: ["google", "ads"] },
-  { id: "marketplaces", label: "Marketplaces (tudo)", groups: ["marketplaces"], keys: ["marketplace"] },
-];
-/** Setor escolhido a mao no passo 2; sem escolha, vale o inferido do nome da equipe (ex.: "Google" -> google). */
-const sector = ref<string | null>(null);
-const inferredSector = computed(() => { const n = sectorName.value; return n ? SECTORS.find((s) => s.keys.some((k) => n.includes(k)))?.id ?? null : null; });
-const activeSector = computed(() => sector.value ?? inferredSector.value);
-/** So gerente pode ser "de tudo" (Gerente de Marketplaces). */
-const sectorOptions = computed(() => SECTORS.filter((s) => form.tipo === "gerente" || s.id !== "marketplaces"));
-/** Papeis do Flexi do tipo escolhido no passo 1 (gerente ou funcionario), filtrados pelo setor ativo. */
-const flexiRoles = computed<FlexiRoleTemplate[]>(() => {
-  if (!apps.flexiConnected) return [];
-  const byRole = apps.templates.filter((t) => t.role === (form.tipo === "gerente" ? "supervisor" : "worker"));
-  if (form.tipo === "gerente") return byRole;
-  const s = SECTORS.find((x) => x.id === activeSector.value);
-  return s ? byRole.filter((t) => s.groups.includes(t.group)) : byRole;
-});
-/** Nome curto do papel: gerentes pelo setor ("Mercado Livre"); funcionarios sem o prefixo "Agente de X:" quando o setor ja esta escolhido. */
-function roleLabel(t: FlexiRoleTemplate): string {
-  if (t.role === "supervisor") return SECTORS.find((s) => s.groups.includes(t.group))?.label ?? t.name;
-  if (!activeSector.value) return t.name;
-  const i = t.name.indexOf(":");
-  return i > 0 ? t.name.slice(i + 1).trim() : t.name;
-}
+/** Especialidades do Flexi: sempre de gerente (o gerente contrata os funcionarios e define o que cada um faz). */
+const flexiRoles = computed<FlexiRoleTemplate[]>(() => (apps.flexiConnected && form.tipo === "gerente" ? apps.templates.filter((t) => t.role === "supervisor") : []));
 function pickRole(t: FlexiRoleTemplate) {
   picked.value = t;
   form.name = t.name;
@@ -71,6 +46,13 @@ const FLEXI_TRUST: { value: "read" | "write"; title: string; description: string
   { value: "read", title: "Somente consulta no Flexi", description: "Le anuncios, perguntas, analises e campanhas. Qualquer alteracao pede sua permissao." },
   { value: "write", title: "Pode editar no Flexi", description: "Altera precos, conteudo, estoque, respostas e campanhas sem perguntar. Criar, publicar, finalizar e copiar anuncios sempre pedem permissao." },
 ];
+const TIPOS = [
+  { id: "gerente" as const, title: "Gerente", text: "Recebe objetivos, divide o trabalho e delega aos funcionários da equipe dele. Acompanha e consolida.", icon: Users },
+  { id: "funcionario" as const, title: "Funcionário", text: "Executa o que você ou o gerente dele pedem. Não delega.", icon: UserRound },
+];
+/** Cor da inicial fixa por DOT (a mesma da tela de Equipes). */
+const SOFT = ["bg-violet-500/20 text-violet-300", "bg-emerald-500/20 text-emerald-300", "bg-amber-500/20 text-amber-300", "bg-sky-500/20 text-sky-300", "bg-rose-500/20 text-rose-300", "bg-teal-500/20 text-teal-300"];
+const avatarCls = (id: string) => SOFT[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % SOFT.length];
 const dotName = (id: string | null | undefined) => (id ? dots.items.find((d) => d.id === id)?.name ?? "?" : null);
 /** Equipes que um gerente novo pode assumir: as que ainda nao tem gerente. */
 const openTeams = computed(() => teams.withoutManager);
@@ -114,8 +96,8 @@ async function create() {
     const d = await dots.create({ name: form.name.trim(), description: "", objective, instructions, primary_engine: form.engine || null, model: null, workspace_path: null, limits: null, role: form.tipo === "gerente" ? "supervisor" : "worker" });
     await api.policies.set(d.id, { auto_approve_level: form.trust });
     const flexi = apps.flexi.find((c) => c.status === "connected");
-    // Papel do Flexi: grava o papel e encaixa o DOT na hierarquia (gerente -> subgerente -> agente) com os que ja existem.
-    if (apps.flexiConnected && flexi) await api.apps.assignRole(d.id, flexi.id, { template_id: picked.value?.id ?? null, group: picked.value?.group ?? SECTORS.find((s) => s.id === activeSector.value)?.groups[0] ?? "marketplaces", role: form.tipo === "gerente" ? "supervisor" : "worker" });
+    // Liga o DOT ao Flexi; gerente com especialidade leva o setor dela.
+    if (apps.flexiConnected && flexi) await api.apps.assignRole(d.id, flexi.id, { template_id: picked.value?.id ?? null, group: picked.value?.group ?? null, role: form.tipo === "gerente" ? "supervisor" : "worker" });
     // Equipe: gerente assume uma equipe sem gerente ou cria uma nova; funcionario entra na equipe escolhida.
     if (form.tipo === "gerente") {
       if (form.teamId) await api.teams.setManager(form.teamId, d.id);
@@ -141,67 +123,87 @@ async function create() {
     </header>
 
     <div class="flex flex-1 items-start justify-center overflow-y-auto px-6 pb-10 pt-6">
-      <div class="w-full max-w-lg">
+      <div class="w-full" :class="step === 1 ? 'max-w-[600px]' : 'max-w-lg'">
         <p v-if="error" class="mb-4 rounded-md bg-red-950/40 px-3 py-2 text-sm text-red-200">{{ error }}</p>
 
         <!-- Passo 1: tipo e equipe -->
         <template v-if="step === 1">
-          <h1 class="text-2xl font-semibold text-zinc-50">Seu novo DOT e gerente ou funcionario?</h1>
-          <p class="mt-1 text-sm text-zinc-400">Primeiro o papel dele, depois o setor.</p>
-          <div class="mt-5 grid grid-cols-2 gap-3">
-            <button class="flex items-start gap-3 rounded-2xl border p-4 text-left" :class="form.tipo === 'gerente' ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600'" @click="form.tipo = 'gerente'; form.teamId = ''">
-              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-indigo-300"><Users :size="18" /></span>
-              <span><span class="block text-sm font-medium text-zinc-100">Gerente</span><span class="block text-xs text-zinc-500">Recebe objetivos, divide o trabalho e delega aos funcionarios da equipe dele. Acompanha e consolida.</span></span>
-            </button>
-            <button class="flex items-start gap-3 rounded-2xl border p-4 text-left" :class="form.tipo === 'funcionario' ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600'" @click="form.tipo = 'funcionario'; form.teamId = ''">
-              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-indigo-300"><UserRound :size="18" /></span>
-              <span><span class="block text-sm font-medium text-zinc-100">Funcionario</span><span class="block text-xs text-zinc-500">Executa o que voce ou o gerente dele pedem. Nao delega.</span></span>
+          <h1 class="text-[28px] font-semibold tracking-tight text-zinc-50">Seu novo DOT é gerente ou funcionário?</h1>
+          <p class="mt-1.5 text-sm text-zinc-400">Primeiro o papel dele, depois o setor.</p>
+          <div class="mt-7 grid grid-cols-2 gap-3">
+            <button v-for="o in TIPOS" :key="o.id" class="rounded-2xl border p-4 text-left transition-colors" :class="form.tipo === o.id ? 'border-violet-500 bg-violet-500/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'" @click="form.tipo = o.id; form.teamId = ''">
+              <span class="flex items-start justify-between">
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg" :class="form.tipo === o.id ? 'bg-violet-500/20 text-violet-300' : 'bg-zinc-800 text-zinc-400'"><component :is="o.icon" :size="16" /></span>
+                <span class="radio" :class="{ on: form.tipo === o.id }" />
+              </span>
+              <span class="mt-3 block text-sm font-semibold text-zinc-100">{{ o.title }}</span>
+              <span class="mt-1 block text-[13px] leading-relaxed text-zinc-400">{{ o.text }}</span>
             </button>
           </div>
 
           <template v-if="form.tipo === 'gerente'">
-            <p class="mt-6 text-xs font-medium uppercase tracking-wide text-zinc-500">Gerente do que?</p>
-            <div class="mt-2 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
-              <label v-for="t in openTeams" :key="t.id" class="flex cursor-pointer items-center gap-3 border-b border-zinc-800 px-4 py-3 hover:bg-zinc-800/60"><input v-model="form.teamId" type="radio" :value="t.id" @change="form.newTeamName = ''" /><span class="min-w-0 flex-1"><span class="block text-sm text-zinc-100">{{ t.name }}</span><span class="block text-xs text-zinc-500">{{ t.member_ids.length ? `${t.member_ids.length} funcionario(s), sem gerente` : "equipe vazia, sem gerente" }}</span></span></label>
-              <label class="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-zinc-800/60"><input v-model="form.teamId" type="radio" value="" /><span class="min-w-0 flex-1"><span class="block text-sm text-zinc-100">Nova equipe</span><input v-model="form.newTeamName" class="input mt-1 h-9" placeholder="nome da equipe, ex.: Mercado Livre" :disabled="form.teamId !== ''" /></span></label>
+            <p class="mb-2 mt-7 text-[13px] font-semibold text-zinc-300">Gerente do quê?</p>
+            <div class="divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+              <label v-for="t in openTeams" :key="t.id" class="row" :class="{ on: form.teamId === t.id }">
+                <input v-model="form.teamId" type="radio" :value="t.id" class="sr-only" @change="form.newTeamName = ''" />
+                <span class="avatar bg-zinc-800 text-zinc-400">{{ t.name.charAt(0).toUpperCase() }}</span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">{{ t.name }}</span><span class="block text-xs text-zinc-500">{{ t.member_ids.length ? `${t.member_ids.length} ${t.member_ids.length === 1 ? "funcionário" : "funcionários"}, sem gerente` : "Equipe vazia, sem gerente" }}</span></span>
+                <span class="radio" :class="{ on: form.teamId === t.id }" />
+              </label>
+              <label class="row" :class="{ on: form.teamId === '' }">
+                <input v-model="form.teamId" type="radio" value="" class="sr-only" />
+                <span class="avatar bg-zinc-800 text-zinc-400">+</span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">Nova equipe</span><input v-model="form.newTeamName" class="input mt-1.5 h-9" placeholder="nome da equipe, ex.: Mercado Livre" :disabled="form.teamId !== ''" /></span>
+                <span class="radio" :class="{ on: form.teamId === '' }" />
+              </label>
             </div>
-            <p class="mt-2 text-xs text-zinc-500">Equipes que ja tem gerente nao aparecem. Para trocar o gerente de uma equipe, use Equipes no menu.</p>
+            <p class="mt-2 text-xs text-zinc-500">Equipes que já têm gerente não aparecem. Para trocar o gerente de uma equipe, use Equipes no menu.</p>
           </template>
           <template v-else>
-            <p class="mt-6 text-xs font-medium uppercase tracking-wide text-zinc-500">Funcionario de quem?</p>
-            <div class="mt-2 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
-              <label v-for="t in teams.items" :key="t.id" class="flex cursor-pointer items-center gap-3 border-b border-zinc-800 px-4 py-3 hover:bg-zinc-800/60"><input v-model="form.teamId" type="radio" :value="t.id" /><span class="min-w-0 flex-1"><span class="block text-sm text-zinc-100">{{ dotName(t.manager_dot_id) ?? "Sem gerente ainda" }}</span><span class="block text-xs text-zinc-500">equipe {{ t.name }}{{ t.member_ids.length ? ` · ${t.member_ids.length} funcionario(s)` : "" }}</span></span></label>
-              <label class="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-zinc-800/60"><input v-model="form.teamId" type="radio" value="" /><span class="block text-sm text-zinc-100">Sem equipe por enquanto</span></label>
+            <p class="mb-2 mt-7 text-[13px] font-semibold text-zinc-300">Funcionário de quem?</p>
+            <div class="divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+              <label v-for="t in teams.items" :key="t.id" class="row" :class="{ on: form.teamId === t.id }">
+                <input v-model="form.teamId" type="radio" :value="t.id" class="sr-only" />
+                <span v-if="t.manager_dot_id" class="avatar" :class="avatarCls(t.manager_dot_id)">{{ (dotName(t.manager_dot_id) ?? "?").charAt(0).toUpperCase() }}</span>
+                <span v-else class="avatar border border-zinc-700 text-zinc-500">–</span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">{{ dotName(t.manager_dot_id) ?? "Sem gerente ainda" }}</span><span class="block text-xs text-zinc-500">Equipe {{ t.name }}{{ t.member_ids.length ? ` · ${t.member_ids.length} ${t.member_ids.length === 1 ? "funcionário" : "funcionários"}` : "" }}</span></span>
+                <span class="radio" :class="{ on: form.teamId === t.id }" />
+              </label>
+              <label class="row" :class="{ on: form.teamId === '' }">
+                <input v-model="form.teamId" type="radio" value="" class="sr-only" />
+                <span class="avatar border border-zinc-700 text-zinc-500">–</span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-zinc-100">Sem equipe por enquanto</span><span class="block text-xs text-zinc-500">Você escolhe depois em Equipes</span></span>
+                <span class="radio" :class="{ on: form.teamId === '' }" />
+              </label>
             </div>
-            <p v-if="!teams.items.length" class="mt-2 text-xs text-zinc-500">Nenhuma equipe ainda. Crie um gerente primeiro ou deixe sem equipe e ajuste depois no perfil.</p>
           </template>
-          <div class="mt-6 flex justify-end">
-            <button class="btn-primary h-11 px-5" @click="next">Continuar</button>
+          <div class="mt-10 flex items-center justify-between">
+            <button class="text-[13px] font-medium text-zinc-400 hover:text-zinc-200" @click="router.back()">Cancelar</button>
+            <button class="flex h-11 items-center gap-2 rounded-xl bg-violet-500 px-5 text-sm font-semibold text-white hover:bg-violet-400" @click="next">Continuar <ArrowRight :size="15" /></button>
           </div>
         </template>
 
         <!-- Passo 2: nome e o que faz -->
         <template v-else-if="step === 2">
           <div class="flex items-center gap-3"><Avatar :name="form.name || '?'" size="lg" /><h1 class="text-2xl font-semibold text-zinc-50">Como ele se chama e o que faz?</h1></div>
-          <template v-if="apps.flexiConnected && apps.templates.length">
-            <p class="mt-5 text-xs font-medium uppercase tracking-wide text-zinc-500">{{ form.tipo === 'gerente' ? 'Gerente de qual setor do Flexi?' : 'Papeis prontos do Flexi' }}</p>
-            <div v-if="form.tipo === 'funcionario'" class="mt-2 flex flex-wrap gap-1.5">
-              <button v-for="s in sectorOptions" :key="s.id" class="rounded-full px-3 py-1 text-xs" :class="activeSector === s.id ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'" @click="sector = s.id">{{ s.label }}</button>
-            </div>
+          <template v-if="flexiRoles.length">
+            <p class="mt-5 text-xs font-medium uppercase tracking-wide text-zinc-500">Especialidade do gerente no Flexi</p>
             <ul class="mt-2 divide-y divide-zinc-800 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
               <li v-for="t in flexiRoles" :key="t.id">
                 <button class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-800/70" :class="picked?.id === t.id ? 'bg-indigo-500/10' : ''" @click="pickRole(t)">
                   <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border" :class="picked?.id === t.id ? 'border-indigo-500 bg-indigo-500 text-white' : 'border-zinc-700 text-transparent'"><Check :size="14" /></span>
-                  <span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium text-zinc-100">{{ roleLabel(t) }}</span><span class="block truncate text-xs text-zinc-500">{{ t.purpose }}</span></span>
+                  <span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium text-zinc-100">{{ t.name }}</span><span class="block truncate text-xs text-zinc-500">{{ t.group_name }} · {{ t.purpose }}</span></span>
                 </button>
               </li>
-              <li v-if="!flexiRoles.length" class="px-4 py-3 text-xs text-zinc-500">Nenhum papel pronto para este setor.</li>
             </ul>
             <div class="mt-6 flex items-center gap-3">
               <span class="h-px flex-1 bg-zinc-800"></span><span class="text-xs text-zinc-500">ou do zero</span><span class="h-px flex-1 bg-zinc-800"></span>
             </div>
           </template>
-          <input v-model="form.name" class="mt-5 h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 text-base text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none" placeholder="Nome do DOT" maxlength="80" :autofocus="!flexiRoles.length" />
+          <div class="mt-5 flex gap-2">
+            <input v-model="form.name" class="h-11 min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-4 text-base text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none" placeholder="Nome do DOT" maxlength="80" :autofocus="!flexiRoles.length" />
+            <button type="button" class="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 text-sm text-zinc-200 hover:bg-zinc-800" title="Gerar um nome comum" @click="genName"><Dices :size="16" /> Gerar nome</button>
+          </div>
           <p class="mt-4 text-sm text-zinc-400">Explique o que ele faz como faria para uma pessoa nova na equipe. Isso vira a identidade dele; da para mudar depois.</p>
           <textarea v-model="form.purpose" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-base text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none" rows="6" placeholder="Ex.: Revisa o codigo da pasta de trabalho e aponta bugs com o arquivo e a linha. Nunca altera arquivos, so recomenda."></textarea>
           <div class="mt-4 flex justify-end gap-2">
@@ -256,3 +258,14 @@ async function create() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Passo 1: linhas de escolha e o radio redondo do desenho */
+.row { display: flex; cursor: pointer; align-items: center; gap: 12px; padding: 12px 16px; }
+.row:hover { background: rgb(39 39 42 / 0.5); }
+.row.on { background: rgb(139 92 246 / 0.08); }
+.avatar { display: flex; height: 32px; width: 32px; flex: none; align-items: center; justify-content: center; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+.radio { position: relative; height: 18px; width: 18px; flex: none; border-radius: 9999px; border: 1.5px solid var(--color-zinc-600); }
+.radio.on { border-color: var(--color-violet-400); }
+.radio.on::after { content: ""; position: absolute; inset: 3px; border-radius: 9999px; background: var(--color-violet-400); }
+</style>

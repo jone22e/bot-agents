@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import EmptyState from "@/components/EmptyState.vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { Check, ChevronDown } from "lucide-vue-next";
 import ErrorBanner from "@/components/ErrorBanner.vue";
 import EventTimeline from "@/components/EventTimeline.vue";
 import OpsPanel from "@/components/OpsPanel.vue";
@@ -22,13 +22,17 @@ const approvals = useApprovalsStore();
 const runtime = useRuntimeStore();
 const newPrompt = ref("");
 const newDot = ref("");
+const showOps = ref(false);
+let timer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
+  timer = setInterval(() => { if (runtime.isConnected) ops.load(); }, 5000);
   if (!runtime.isConnected) return;
   if (dots.items.length === 0) await dots.load();
   await Promise.allSettled([tasks.load(), ops.load(), approvals.load()]);
   if (!newDot.value && dots.active[0]) newDot.value = dots.active[0].id;
 });
+onUnmounted(() => { if (timer) clearInterval(timer); });
 function dotName(id: string) { return dots.items.find((d) => d.id === id)?.name ?? "DOT"; }
 async function createTask() {
   if (!newDot.value || !newPrompt.value.trim()) return;
@@ -39,52 +43,91 @@ async function togglePause() {
   await api.runtime.pauseAll(!(ops.stats?.paused ?? false));
   await ops.load();
 }
+function setOnlyActive(v: boolean) {
+  if (tasks.onlyActive === v) return;
+  tasks.onlyActive = v;
+  tasks.load();
+}
+function openOps() {
+  tasks.select(null);
+  showOps.value = true;
+}
+function when(iso: string) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${time}`;
+}
+const procCpu = computed(() => (ops.stats?.processes ?? []).reduce((n, p) => n + p.cpu_percent, 0));
+const procMb = computed(() => (ops.stats?.processes ?? []).reduce((n, p) => n + p.rss_bytes, 0) / 1048576);
 const failureKind = (e: string | null) => (e ? describeFailure(e.includes("Not logged in") || e.includes("login") ? "auth" : "engine", e) : "");
 </script>
 
 <template>
   <div class="flex h-full flex-col">
-  <PageHeader title="Atividades" subtitle="Tudo o que os DOTs fizeram, estao fazendo ou esperam de voce" />
+  <PageHeader title="Atividades">
+    <template #subtitle>
+      <span v-if="ops.stats" class="flex flex-wrap items-center gap-x-4">
+        <span class="flex items-center gap-1.5 text-zinc-200"><span class="h-1.5 w-1.5 rounded-full bg-violet-500"></span>{{ ops.stats.running }} trabalhando</span>
+        <span>{{ ops.stats.queued }} na fila</span>
+        <span :class="ops.stats.blocked > 0 ? 'text-amber-300' : ''">{{ ops.stats.blocked }} esperando você</span>
+        <span :class="ops.stats.failures_24h > 0 ? 'text-red-300' : ''">{{ ops.stats.failures_24h }} não deram certo em 24 h</span>
+        <span v-if="ops.stats.paused" class="text-amber-300">fila pausada</span>
+      </span>
+      <template v-else>Tudo o que os DOTs fizeram, estão fazendo ou esperam de você</template>
+    </template>
+    <button class="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800" @click="togglePause">{{ ops.stats?.paused ? "Retomar a fila" : "Pausar tudo" }}</button>
+  </PageHeader>
+
+  <div class="mx-6 mb-4 flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-1.5">
+    <div class="relative shrink-0">
+      <select v-model="newDot" class="h-9 cursor-pointer appearance-none rounded-lg bg-zinc-800 pl-3 pr-8 text-sm font-medium text-zinc-100 focus:outline-none"><option value="" disabled>Para qual DOT</option><option v-for="d in dots.active" :key="d.id" :value="d.id">{{ d.name }}</option></select>
+      <ChevronDown :size="14" class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+    </div>
+    <input v-model="newPrompt" class="h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none" placeholder="Peça um trabalho: o que ele deve fazer?" @keyup.enter="createTask" />
+    <button class="h-9 shrink-0 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!newDot || !newPrompt.trim()" @click="createTask">Enviar</button>
+  </div>
+
   <div v-if="approvals.pending.length" class="mx-6 mb-3 space-y-2">
-    <p class="text-xs font-semibold uppercase tracking-wide text-amber-300">Esperando voce ({{ approvals.pending.length }})</p>
+    <p class="text-xs font-semibold uppercase tracking-wide text-amber-300">Esperando você ({{ approvals.pending.length }})</p>
     <ApprovalCard v-for="a in approvals.pending" :key="a.id" :approval="a" :busy="approvals.deciding !== null" @approve="approvals.decide(a.id, true)" @reject="approvals.decide(a.id, false)" @answer="(t) => approvals.decide(a.id, true, t)" />
   </div>
-  <div class="flex min-h-0 flex-1 gap-4 px-6 pb-6">
-    <section class="flex w-1/2 min-w-0 flex-col gap-3">
-      <div class="card">
-        <p class="mb-2 text-xs font-medium text-zinc-400">Pedir um trabalho</p>
-        <div class="flex gap-2">
-          <select v-model="newDot" class="input w-44"><option value="" disabled>Para qual DOT</option><option v-for="d in dots.active" :key="d.id" :value="d.id">{{ d.name }}</option></select>
-          <input v-model="newPrompt" class="input" placeholder="O que ele deve fazer" @keyup.enter="createTask" />
-          <button class="btn-primary" :disabled="!newDot || !newPrompt.trim()" @click="createTask">Enviar</button>
+
+  <div class="flex min-h-0 flex-1 gap-6 px-6">
+    <section class="flex min-w-0 basis-3/5 flex-col">
+      <div class="mb-2 flex items-center justify-between">
+        <div class="flex gap-5 text-sm">
+          <button class="border-b-2 pb-1.5 font-semibold" :class="!tasks.onlyActive ? 'border-violet-500 text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-300'" @click="setOnlyActive(false)">Todos</button>
+          <button class="border-b-2 pb-1.5 font-semibold" :class="tasks.onlyActive ? 'border-violet-500 text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-300'" @click="setOnlyActive(true)">Em andamento</button>
         </div>
-      </div>
-      <div class="flex items-center justify-between text-xs text-zinc-400">
-        <div class="flex items-center gap-3">
-          <label class="flex items-center gap-1"><input v-model="tasks.onlyActive" type="checkbox" @change="tasks.load()" /> so em andamento</label>
-          <select v-model="tasks.filterDot" class="input w-40" @change="tasks.load()"><option :value="null">todos os DOTs</option><option v-for="d in dots.items" :key="d.id" :value="d.id">{{ d.name }}</option></select>
-        </div>
-        <button class="btn-ghost" @click="togglePause">{{ ops.stats?.paused ? "Retomar a fila" : "Pausar tudo" }}</button>
+        <select v-model="tasks.filterDot" class="cursor-pointer bg-transparent text-xs text-zinc-500 hover:text-zinc-300 focus:outline-none" @change="tasks.load()"><option :value="null">todos os DOTs</option><option v-for="d in dots.items" :key="d.id" :value="d.id">{{ d.name }}</option></select>
       </div>
       <ErrorBanner :message="tasks.error" />
-      <EmptyState v-if="!tasks.loading && tasks.items.length === 0" title="Nenhum trabalho ainda" description="Peca um trabalho acima ou converse com um DOT. Tudo o que ele fizer aparece aqui." />
-      <ul v-else class="flex-1 space-y-1 overflow-y-auto">
+      <div v-if="!tasks.loading && tasks.items.length === 0" class="py-16 text-center">
+        <p class="text-sm font-medium text-zinc-200">Nenhum trabalho ainda</p>
+        <p class="mt-1 text-xs text-zinc-500">Peça um trabalho acima ou converse com um DOT. Tudo o que ele fizer aparece aqui.</p>
+      </div>
+      <ul v-else class="flex-1 overflow-y-auto pb-4 pr-2">
         <li v-for="t in tasks.items" :key="t.id">
-          <button class="w-full rounded-md border px-3 py-2 text-left hover:bg-zinc-900" :class="t.id === tasks.selectedId ? 'border-indigo-700 bg-zinc-900' : 'border-zinc-800'" @click="tasks.select(t.id)">
-            <div class="flex items-center justify-between gap-2">
-              <span class="truncate text-sm text-zinc-100">{{ t.title }}</span>
-              <TaskStatusBadge :status="t.status" />
+          <button class="flex w-full items-center justify-between gap-3 rounded-lg px-3.5 py-2.5 text-left hover:bg-zinc-900" :class="t.id === tasks.selectedId ? 'bg-zinc-900' : ''" @click="tasks.select(t.id); showOps = false">
+            <div class="min-w-0">
+              <p class="truncate text-sm text-zinc-100">{{ t.title }}</p>
+              <p class="mt-0.5 text-xs text-zinc-500" :title="describeOrigin(t, dotName)">{{ dotName(t.dot_id) }} · {{ when(t.created_at) }}</p>
             </div>
-            <p class="mt-0.5 text-xs text-zinc-500">{{ dotName(t.dot_id) }} · {{ describeOrigin(t, dotName) }} · {{ new Date(t.created_at).toLocaleString() }}</p>
+            <span v-if="t.status === 'RUNNING'" class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-0.5 text-xs font-medium text-violet-300"><span class="h-1.5 w-1.5 rounded-full bg-violet-400"></span>Trabalhando</span>
+            <Check v-else-if="t.status === 'COMPLETED'" :size="15" class="mr-1 shrink-0 text-emerald-400" />
+            <TaskStatusBadge v-else class="shrink-0" :status="t.status" />
           </button>
         </li>
       </ul>
     </section>
 
-    <section class="flex w-1/2 min-w-0 flex-col overflow-y-auto">
+    <section class="flex min-w-0 basis-2/5 flex-col overflow-y-auto pb-4">
       <template v-if="!tasks.selected">
-        <OpsPanel />
-        <EmptyState class="mt-3" title="Escolha um trabalho" description="Voce vera o que o DOT fez, passo a passo, e o resultado." />
+        <OpsPanel v-if="showOps" />
+        <div v-else class="flex flex-1 flex-col items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/40 px-8 text-center">
+          <p class="text-sm font-semibold text-zinc-100">Escolha um trabalho</p>
+          <p class="mt-1 max-w-xs text-xs leading-relaxed text-zinc-500">Você verá o que o DOT fez, passo a passo, e o resultado.</p>
+        </div>
       </template>
       <template v-else>
         <div class="card">
@@ -136,5 +179,10 @@ const failureKind = (e: string | null) => (e ? describeFailure(e.includes("Not l
       </template>
     </section>
   </div>
+
+  <footer class="flex items-center justify-end gap-4 px-6 py-3 text-xs text-zinc-500">
+    <span :title="ops.stats?.processes.length ? 'CPU e memória dos assistentes em execução' : undefined">{{ runtime.isConnected ? "Serviço ativo" : "Serviço desconectado" }}<template v-if="ops.stats?.processes.length"> · CPU {{ procCpu.toFixed(0) }}% · {{ procMb.toFixed(0) }} MB</template></span>
+    <button class="font-medium text-violet-400 hover:text-violet-300" @click="showOps ? (showOps = false) : openOps()">{{ showOps ? "Ocultar detalhes" : "Ver detalhes" }}</button>
+  </footer>
   </div>
 </template>

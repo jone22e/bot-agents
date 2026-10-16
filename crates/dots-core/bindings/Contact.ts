@@ -12,4 +12,8 @@ state: string, state_text: string, pending_requests: number,
 /**
  * Cargo: nome do papel de origem (ex.: "Gerente de Google Ads"); nulo para DOTs sem papel.
  */
-title: string | null, };
+title: string | null, 
+/**
+ * Batimento na lista de contatos: live (trabalhando) | waiting (espera alguem) | standby (na fila) | error (ultimo trabalho falhou) | idle.
+ */
+pulse: string, };

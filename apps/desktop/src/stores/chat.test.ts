@@ -24,6 +24,17 @@ describe("chat store (uma conversa por DOT)", () => {
     expect(s.live.taskId).toBe("t1");
   });
 
+  it("sends a message with only attachments", async () => {
+    invoke.mockResolvedValue({ message: { id: "m2", role: "user", content: "" }, task: { id: "t2" } });
+    const s = useChatStore();
+    s.conversationId = "c1";
+    await s.send("", ["/ws/anexos/a.png"]);
+    expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "conversations.send", params: { conversation_id: "c1", content: "", attachments: ["/ws/anexos/a.png"] } });
+    invoke.mockClear();
+    await s.send("  ", []);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("streams events for the live task and picks up trigger-started work", async () => {
     const s = useChatStore();
     s.dotId = "d1";

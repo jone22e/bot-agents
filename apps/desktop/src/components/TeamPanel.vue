@@ -1,22 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { UserMinus, UserPlus } from "lucide-vue-next";
+import { UserMinus, UserPlus, UserX } from "lucide-vue-next";
 import ErrorBanner from "@/components/ErrorBanner.vue";
+import { useDismissalsStore } from "@/stores/dismissals";
 import { useDotsStore } from "@/stores/dots";
 import { useTeamsStore } from "@/stores/teams";
 
 const props = defineProps<{ dotId: string }>();
 const teams = useTeamsStore();
 const dots = useDotsStore();
+const dismissals = useDismissalsStore();
 const router = useRouter();
 const newTeam = ref("");
 const addId = ref("");
 const joinId = ref("");
 
-onMounted(async () => { await teams.load(); if (!dots.items.length) await dots.load(); });
+onMounted(async () => {
+  await teams.load();
+  if (!dots.items.length) await dots.load();
+  for (const t of [manages.value, memberOf.value]) if (t) await dismissals.load(t.id);
+});
 const manages = computed(() => teams.managedBy(props.dotId));
 const memberOf = computed(() => teams.memberOf(props.dotId));
+watch(() => [manages.value?.id, memberOf.value?.id], ([a, b]) => { for (const id of [a, b]) if (id) dismissals.load(id); });
+/** Demissoes que este DOT ve: as da equipe que gerencia (fez) e as da equipe em que trabalha (licoes). */
+const history = computed(() => {
+  const seen = new Set<string>();
+  return [manages.value, memberOf.value].flatMap((t) => dismissals.forTeam(t?.id)).filter((d) => !seen.has(d.id) && seen.add(d.id)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+});
+/** Demissoes registradas com o id deste DOT (as antigas, de quando o demitido continuava existindo). */
+const ownCount = computed(() => history.value.filter((d) => d.dot_id === props.dotId).length);
+const when = (iso: string) => new Date(iso).toLocaleDateString();
 const name = (id: string | null | undefined) => (id ? dots.items.find((d) => d.id === id)?.name ?? "?" : "");
 /** Candidatos a funcionario: DOTs ativos que nao sao este, nem ja estao na equipe. */
 const candidates = computed(() => dots.items.filter((d) => d.id !== props.dotId && d.status !== "archived" && !manages.value?.member_ids.includes(d.id)));
@@ -82,6 +97,23 @@ async function join() {
         </div>
       </template>
       <p class="text-xs text-zinc-500">Cada DOT trabalha com as proprias permissoes; nada e herdado de quem pediu. Pedidos entre DOTs aparecem em Atividades.</p>
+    </section>
+    <section v-if="manages || memberOf" class="card space-y-3">
+      <h3 class="flex items-center gap-2 text-sm font-semibold text-zinc-200"><UserX :size="15" /> Demissoes</h3>
+      <p class="text-xs text-zinc-500">
+        <template v-if="manages">O gerente contrata funcionarios (cria nome e funcao) ate o limite definido em Configuracoes e pode demitir um por um motivo (pede sua permissao). O demitido e excluido e o gerente contrata um substituto; o motivo e a licao ficam aqui e entram nas instrucoes de toda a equipe para ninguem repetir o erro.</template>
+        <template v-else>Licoes registradas na equipe: cada funcionario recebe isto nas instrucoes para nao repetir o erro.</template>
+        <span v-if="ownCount" class="text-amber-300"> Este DOT ja foi demitido {{ ownCount }} vez(es) e recomecou do zero.</span>
+      </p>
+      <ErrorBanner :message="dismissals.error" />
+      <ul v-if="history.length" class="divide-y divide-zinc-800 rounded-xl border border-zinc-800">
+        <li v-for="d in history" :key="d.id" class="space-y-1 px-3 py-2 text-sm">
+          <p class="text-zinc-100"><strong>{{ d.dot_name }}</strong> <span class="text-zinc-500">demitido por {{ d.manager_name }} em {{ when(d.created_at) }} · {{ d.team_name }}</span></p>
+          <p class="text-zinc-300">Motivo: {{ d.reason }}</p>
+          <p v-if="d.lesson && d.lesson !== d.reason" class="text-emerald-300">Licao: {{ d.lesson }}</p>
+        </li>
+      </ul>
+      <p v-else class="text-xs text-zinc-500">Nenhuma demissao ainda.</p>
     </section>
     <p class="text-xs text-zinc-500">Todas as equipes: <button class="text-indigo-400 hover:underline" @click="router.push('/teams')">abrir Equipes</button></p>
   </div>

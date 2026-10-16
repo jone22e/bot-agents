@@ -11,7 +11,7 @@ const router = useRouter();
     <button class="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700" title="Voltar" @click="router.back()"><ArrowLeft :size="16" /></button>
     <div>
       <h1 class="text-base font-semibold text-zinc-100">{{ title }}</h1>
-      <p v-if="subtitle" class="text-xs text-zinc-500">{{ subtitle }}</p>
+      <p v-if="subtitle || $slots.subtitle" class="text-xs text-zinc-500"><slot name="subtitle">{{ subtitle }}</slot></p>
     </div>
     <div class="ml-auto"><slot /></div>
   </header>
