@@ -412,8 +412,28 @@ impl RuntimeService {
             "dots.update" => {
                 let UpdateDotParams { id, patch } = p(params)?;
                 let id2 = id.clone();
-                let dot = self.storage.call(move |s| s.dots().update(ACTOR_USER, &id2, patch)).await?;
+                // Gerente que troca de assistente ou modelo leva os funcionarios da equipe junto.
+                let (dot, members) = self
+                    .storage
+                    .call(move |s| {
+                        let before = s.dots().get(&id2)?;
+                        let dot = s.dots().update(ACTOR_USER, &id2, patch)?;
+                        let mut members = vec![];
+                        if dot.primary_engine != before.primary_engine || dot.model != before.model {
+                            if let Some(team) = s.teams().managed_by(&id2)? {
+                                for m in team.member_ids {
+                                    s.dots().update(ACTOR_USER, &m, DotUpdate { primary_engine: Some(dot.primary_engine), model: Some(dot.model.clone()), ..Default::default() })?;
+                                    members.push(m);
+                                }
+                            }
+                        }
+                        Ok((dot, members))
+                    })
+                    .await?;
                 self.events.emit("dots.changed", json!({ "id": id, "action": "update" }));
+                for m in members {
+                    self.events.emit("dots.changed", json!({ "id": m, "action": "update" }));
+                }
                 Ok(json!(dot))
             }
             "dots.duplicate" => {
@@ -639,7 +659,8 @@ impl RuntimeService {
                         let mine: Vec<&dots_core::Task> = active.iter().filter(|t| t.dot_id == dot.id).collect();
                         let reqs = pending.iter().filter(|a| a.dot_id == dot.id && !routed.contains(&a.id)).count() as u32;
                         let asked_manager = pending.iter().find(|a| a.dot_id == dot.id && routed.contains(&a.id)).map(|a| a.kind == dots_core::ApprovalKind::Question);
-                        let last_failed = s.tasks().list(&TaskFilter { dot_id: Some(dot.id.clone()), limit: 1, ..Default::default() })?.first().map(|t| t.status == TaskStatus::Failed).unwrap_or(false);
+                        let last_status = s.tasks().list(&TaskFilter { dot_id: Some(dot.id.clone()), limit: 1, ..Default::default() })?.first().map(|t| t.status);
+                        let last_failed = last_status == Some(TaskStatus::Failed);
                         let (state, text) = if reqs > 0 {
                             ("attention", if pending.iter().any(|a| a.dot_id == dot.id && !routed.contains(&a.id) && a.kind == dots_core::ApprovalKind::Question) { "Fez uma pergunta" } else { "Pede sua permissao" }.to_string())
                         } else if let Some(is_question) = asked_manager {
@@ -673,7 +694,7 @@ impl RuntimeService {
                         } else {
                             "idle"
                         };
-                        out.push(dots_core::Contact { conversation_id: conv.id, last_message: conv.last_message, last_role: conv.last_role, last_at: conv.updated_at, state: state.into(), state_text: text, pending_requests: reqs, title, pulse: pulse.into(), dot });
+                        out.push(dots_core::Contact { conversation_id: conv.id, last_message: conv.last_message, last_role: conv.last_role, last_at: conv.updated_at, state: state.into(), state_text: text, pending_requests: reqs, title, pulse: pulse.into(), done: last_status == Some(TaskStatus::Completed), dot });
                     }
                     out.sort_by(|a, b| b.last_at.cmp(&a.last_at));
                     Ok(out)

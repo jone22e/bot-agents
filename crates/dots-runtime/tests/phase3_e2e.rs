@@ -552,6 +552,43 @@ async fn dismissal_deletes_employee_and_frees_the_slot() {
 }
 
 #[tokio::test]
+async fn manager_model_change_applies_to_all_employees() {
+    let rt = start().await;
+    let sup = rt.create_dot("Chefe", "read", "supervisor").await;
+    let a = rt.create_dot("Ana", "read", "worker").await;
+    let b = rt.create_dot("Bia", "read", "worker").await;
+    let avulso = rt.create_dot("Caio", "read", "worker").await;
+    rt.call("teams.create", json!({ "name": "Vendas", "manager_dot_id": sup.id, "member_ids": [a.id, b.id] })).await;
+    let r = &rt;
+    let model_of = |id: String| async move { serde_json::from_value::<Dot>(r.call("dots.get", json!({ "id": id })).await).unwrap().model };
+    rt.call("dots.update", json!({ "id": sup.id, "patch": { "model": "opus" } })).await;
+    assert_eq!(model_of(a.id.clone()).await.as_deref(), Some("opus"));
+    assert_eq!(model_of(b.id.clone()).await.as_deref(), Some("opus"));
+    assert_eq!(model_of(avulso.id.clone()).await, None, "quem nao e da equipe nao muda");
+    // Funcionario pode ter modelo proprio; salvar o gerente sem trocar o modelo nao sobrescreve.
+    rt.call("dots.update", json!({ "id": a.id, "patch": { "model": "haiku" } })).await;
+    rt.call("dots.update", json!({ "id": sup.id, "patch": { "name": "Chefia", "model": "opus" } })).await;
+    assert_eq!(model_of(a.id.clone()).await.as_deref(), Some("haiku"));
+    // Voltar ao padrao do assistente tambem vale para a equipe.
+    rt.call("dots.update", json!({ "id": sup.id, "patch": { "model": null } })).await;
+    assert_eq!(model_of(a.id.clone()).await, None);
+    assert_eq!(model_of(b.id.clone()).await, None);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn contact_is_done_when_last_task_completed() {
+    let rt = start().await;
+    let dot = rt.create_dot("Ana", "read", "worker").await;
+    let done_of = || async { serde_json::from_value::<Vec<Contact>>(rt.call("contacts.list", json!({})).await).unwrap().into_iter().find(|c| c.dot.id == dot.id).unwrap().done };
+    assert!(!done_of().await, "sem trabalho ainda: ocioso");
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": dot.id, "prompt": "oi", "title": "Oi" })).await).unwrap();
+    rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
+    assert!(done_of().await, "ultimo trabalho deu certo: concluido");
+    rt.stop();
+}
+
+#[tokio::test]
 async fn group_message_reaches_every_manager_and_collects_replies() {
     let rt = start().await;
     let a = rt.create_dot("Gerente A", "read", "supervisor").await;
