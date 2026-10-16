@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { avatarUri } from "@/lib/avatar";
 
-const props = defineProps<{ name: string; size?: "sm" | "md" | "lg"; state?: "idle" | "busy" | "attention" | string }>();
+/** `seed` (id do DOT) mostra a imagem de perfil dele; sem ela, as iniciais do nome. */
+const props = defineProps<{ name: string; seed?: string | null; size?: "sm" | "md" | "lg"; state?: "idle" | "busy" | "attention" | string }>();
+const image = computed(() => (props.seed ? avatarUri(props.seed) : null));
 const palette = ["bg-indigo-500", "bg-emerald-500", "bg-sky-500", "bg-rose-500", "bg-amber-500", "bg-violet-500", "bg-teal-500"];
 const color = computed(() => palette[[...props.name].reduce((n, c) => n + c.charCodeAt(0), 0) % palette.length]);
 const initials = computed(() => props.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?");
@@ -10,8 +13,9 @@ const dot = computed(() => ({ idle: null, busy: "bg-sky-400", attention: "bg-amb
 </script>
 
 <template>
-  <span class="relative inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white" :class="[color, sizeCls]">
-    {{ initials }}
+  <span class="relative inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white" :class="[image ? '' : color, sizeCls]">
+    <img v-if="image" :src="image" :alt="name" class="h-full w-full rounded-full" draggable="false" />
+    <template v-else>{{ initials }}</template>
     <span v-if="dot" class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-zinc-950" :class="dot"></span>
   </span>
 </template>

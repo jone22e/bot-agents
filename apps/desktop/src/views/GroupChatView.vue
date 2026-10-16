@@ -162,7 +162,7 @@ function autosize() {
       <template v-for="r in rows" :key="r.key">
         <p v-if="r.kind === 'date'" class="day">{{ r.label }}</p>
         <div v-else class="message-row" :class="r.g.role === 'user' ? 'mine' : 'theirs'">
-          <Avatar v-if="r.g.role === 'dot'" :name="r.g.dot_name ?? '?'" size="sm" />
+          <Avatar v-if="r.g.role === 'dot'" :name="r.g.dot_name ?? '?'" :seed="r.g.dot_id" size="sm" />
           <div class="message-body">
             <button v-if="r.g.role === 'dot'" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
             <div class="message-bubble">
@@ -179,7 +179,7 @@ function autosize() {
     <footer class="composer">
       <ul v-if="mention && mentionList.length" class="mentions" role="listbox">
         <li v-for="(d, i) in mentionList" :key="d.id" role="option" :aria-selected="i === mentionIdx" :class="{ on: i === mentionIdx }" @mousedown.prevent="pickMention(d)" @mouseenter="mentionIdx = i">
-          <Avatar :name="d.name" size="sm" />
+          <Avatar :name="d.name" :seed="d.id" size="sm" />
           <strong>{{ d.name }}</strong>
           <span v-if="titleOf(d.id)" class="ellipsis">{{ titleOf(d.id) }}</span>
         </li>

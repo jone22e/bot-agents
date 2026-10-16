@@ -67,7 +67,7 @@ async function remove() {
         </div>
       </template>
       <template v-else>
-        <Avatar :name="dot.name" size="md" />
+        <Avatar :name="dot.name" :seed="dot.id" size="md" />
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold text-zinc-100">{{ dot.name }}</p>
           <p class="truncate text-xs text-zinc-500">{{ subtitle }}</p>

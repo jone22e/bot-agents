@@ -16,10 +16,12 @@ import { api, mediaApi, RuntimeError } from "@/api";
 import { useDictation } from "@/composables/useDictation";
 import { toolName } from "@/lib/humanize";
 import { md, onMdClick } from "@/lib/markdown";
+import { modelLabel } from "@/lib/models";
 import { useApprovalsStore } from "@/stores/approvals";
 import { useChatStore } from "@/stores/chat";
 import { useContactsStore } from "@/stores/contacts";
 import { useDotsStore } from "@/stores/dots";
+import { useEnginesStore } from "@/stores/engines";
 import { useRuntimeStore } from "@/stores/runtime";
 
 const route = useRoute();
@@ -27,6 +29,7 @@ const router = useRouter();
 const chat = useChatStore();
 const contacts = useContactsStore();
 const dots = useDotsStore();
+const engines = useEnginesStore();
 const approvals = useApprovalsStore();
 const runtime = useRuntimeStore();
 const draft = ref("");
@@ -37,6 +40,14 @@ const box = ref<HTMLTextAreaElement | null>(null);
 
 const dotId = computed(() => (route.params.dotId as string | undefined) ?? null);
 const dot = computed(() => dots.items.find((d) => d.id === dotId.value) ?? contacts.byDot(dotId.value ?? "")?.dot ?? null);
+/** Modelo que o DOT usa: o dele ou, sem nenhum, o padrao do assistente em Configuracoes. */
+const dotModel = computed(() => {
+  const engine = dot.value?.primary_engine;
+  if (!engine) return "";
+  const cfg = engines.byKind(engine);
+  const id = dot.value?.model || cfg?.model;
+  return id ? modelLabel(engine, id, cfg?.last_detection?.models ?? []) : "";
+});
 const pendingApprovals = computed(() => chat.pendingFor(approvals.pending));
 
 type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; m: Message; last: boolean };
@@ -290,8 +301,9 @@ function autosize() {
       <template v-else>
         <header class="relative flex items-center justify-center py-3" data-tauri-drag-region>
           <button class="flex items-center gap-2 rounded-full bg-zinc-800/90 px-3 py-1.5 text-sm font-medium text-zinc-100 hover:bg-zinc-700" @click="showProfile = !showProfile; if (showProfile) showComputer = false">
-            <Avatar :name="dot.name" size="sm" :state="contacts.byDot(dot.id)?.state" />
+            <Avatar :name="dot.name" :seed="dot.id" size="sm" :state="contacts.byDot(dot.id)?.state" />
             {{ dot.name }}
+            <span v-if="dotModel" class="font-normal text-zinc-400">· {{ dotModel }}</span>
           </button>
           <button class="absolute right-4 flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" :class="showComputer ? 'bg-zinc-800 text-zinc-100' : ''" :title="`Computador de ${dot.name}`" @click="showComputer = !showComputer; if (showComputer) showProfile = false"><Monitor :size="18" /></button>
         </header>
@@ -299,7 +311,7 @@ function autosize() {
 
         <main ref="thread" class="thread" @scroll="onScroll">
           <div v-if="!rows.length && !chat.busy" class="empty">
-            <Avatar :name="dot.name" size="lg" />
+            <Avatar :name="dot.name" :seed="dot.id" size="lg" />
             <h2>Pronto para começar</h2>
             <p>{{ dot.name }} inicia automaticamente ao ser criado. Se ainda não começou, use o botão para pedir que siga o objetivo definido, ou escreva abaixo.</p>
             <button v-if="!canCompose" type="button" class="btn-primary mt-1" :disabled="!canStart" @click="startWork">{{ chat.sending ? "Iniciando..." : "Iniciar trabalho" }}</button>
@@ -313,7 +325,7 @@ function autosize() {
             <div v-if="chat.live.text" class="md" @click="onMdClick($event, openUrl)" v-html="md(chat.live.text, false)" />
             <ToolGroup v-if="chat.live.tools.length" :items="chat.live.tools" />
             <div class="progress">
-              <Avatar :name="dot.name" size="sm" class="spin-logo" />
+              <Avatar :name="dot.name" :seed="dot.id" size="sm" class="spin-logo" />
               <span class="mono">{{ elapsed }}</span> · {{ activity }}
             </div>
           </div>

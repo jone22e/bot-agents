@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Activity, Blocks, Plus, Search, Settings, Users } from "lucide-vue-next";
+import { Activity, Blocks, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
 import Avatar from "@/components/Avatar.vue";
 import Heartbeat from "@/components/Heartbeat.vue";
 import UsageChip from "@/components/UsageChip.vue";
@@ -95,8 +95,9 @@ function startWindowDrag(event: MouseEvent) {
 
 <template>
   <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false">
-    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" @mousedown="startWindowDrag">
+    <header class="relative flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" @mousedown="startWindowDrag">
       <span class="text-[11px] font-semibold tracking-[0.16em] text-zinc-400">DOTS</span>
+      <button class="absolute left-1/2 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full px-3 text-sm font-medium hover:bg-zinc-800 hover:text-zinc-100" :class="route.name === 'overview' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'" title="Visão geral dos agentes" @click="go('/overview')"><LayoutGrid :size="15" /> Visão geral</button>
       <span class="flex-1" />
       <UsageChip opens="down" />
       <div class="relative" data-no-window-drag>
@@ -142,7 +143,7 @@ function startWindowDrag(event: MouseEvent) {
         <p v-if="s.title" class="mt-3 mb-1 flex items-baseline gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500"><span class="truncate">{{ s.title }}</span><span v-if="s.subtitle" class="truncate font-normal normal-case tracking-normal text-zinc-600">{{ s.subtitle }}</span></p>
         <template v-for="c in s.rows" :key="c.dot.id">
         <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
-          <Avatar :name="c.dot.name" size="sm" :state="c.state" />
+          <Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" :state="c.state" />
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-1.5">
               <span class="max-w-[60%] shrink-0 truncate text-[13px] text-zinc-200">{{ c.dot.name }}</span>
@@ -154,7 +155,7 @@ function startWindowDrag(event: MouseEvent) {
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
         </button>
         <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
-          <Avatar :name="c.dot.name" :state="c.state" />
+          <Avatar :name="c.dot.name" :seed="c.dot.id" :state="c.state" />
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline justify-between gap-2">
               <span class="truncate text-sm font-medium text-zinc-100">{{ c.dot.name }}</span>
