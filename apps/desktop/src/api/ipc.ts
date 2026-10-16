@@ -38,3 +38,11 @@ export const runtimeApi = {
   appPaths: () => invoke<AppPaths>("app_paths").catch((e) => { throw normalize(e); }),
   setStartAtLogin: (enabled: boolean) => invoke<AppPaths>("runtime_set_start_at_login", { enabled }).catch((e) => { throw normalize(e); }),
 };
+
+/** Midia do compositor: ditado e miniaturas (comandos do lado Rust do app). */
+export const mediaApi = {
+  /** WAV mono 16 kHz -> texto, transcrito neste Mac. */
+  transcribe: (wav: Uint8Array) => invoke<string>("transcribe_audio", wav).catch((e) => { throw normalize(e); }),
+  /** Miniatura (data URL) de uma imagem; null se nao for imagem. */
+  imagePreview: (path: string) => invoke<string | null>("image_preview", { path }).catch(() => null),
+};
