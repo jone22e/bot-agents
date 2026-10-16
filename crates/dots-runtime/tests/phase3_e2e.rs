@@ -571,6 +571,7 @@ async fn group_message_reaches_every_manager_and_collects_replies() {
         let ts = rt.wait_tasks(&d.id, |ts| ts.iter().any(|t| t.origin.starts_with("group:") && t.status == TaskStatus::Completed), Duration::from_secs(30)).await;
         let gt = ts.iter().find(|t| t.origin.starts_with("group:")).unwrap();
         assert!(gt.prompt.contains("grupo geral") && gt.prompt.contains("Bom dia"));
+        assert!(gt.prompt.contains("conversa natural de grupo") && gt.prompt.contains("paragrafos curtos"));
         // A mensagem tambem aparece na conversa do gerente.
         let conv: Conversation = serde_json::from_value(rt.call("conversations.main", json!({ "dot_id": d.id })).await).unwrap();
         let msgs: Vec<Message> = serde_json::from_value(rt.call("conversations.messages", json!({ "id": conv.id })).await).unwrap();
