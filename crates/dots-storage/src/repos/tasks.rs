@@ -82,6 +82,31 @@ impl<'a> TasksRepo<'a> {
             .ok_or_else(|| DotsError::NotFound(format!("tarefa {id}")))
     }
 
+    pub fn exists_origin(&self, origin: &str) -> DotsResult<bool> {
+        let count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM tasks WHERE origin = ?1", params![origin], |r| r.get(0))
+            .map_err(storage_err)?;
+        Ok(count > 0)
+    }
+
+    pub fn has_any_for_dot(&self, dot_id: &str) -> DotsResult<bool> {
+        let count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM tasks WHERE dot_id = ?1", params![dot_id], |r| r.get(0))
+            .map_err(storage_err)?;
+        Ok(count > 0)
+    }
+
+    pub fn has_open_for_dot(&self, dot_id: &str) -> DotsResult<bool> {
+        let count: i64 = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE dot_id = ?1 AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+                params![dot_id],
+                |r| r.get(0),
+            )
+            .map_err(storage_err)?;
+        Ok(count > 0)
+    }
+
     pub fn list(&self, f: &TaskFilter) -> DotsResult<Vec<Task>> {
         let mut sql = format!("SELECT {COLS} FROM tasks WHERE 1=1");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![];
