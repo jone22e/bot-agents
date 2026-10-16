@@ -8,6 +8,8 @@ import DotForm from "@/components/DotForm.vue";
 import IntegrationPanel from "@/components/IntegrationPanel.vue";
 import MemoryPanel from "@/components/MemoryPanel.vue";
 import PolicyPanel from "@/components/PolicyPanel.vue";
+import ResizeHandle from "@/components/ResizeHandle.vue";
+import { useColumnWidth } from "@/composables/useColumnWidth";
 import TeamPanel from "@/components/TeamPanel.vue";
 import TriggersPanel from "@/components/TriggersPanel.vue";
 import { ENGINE_LABEL } from "@/lib/humanize";
@@ -18,6 +20,8 @@ const props = defineProps<{ dot: Dot }>();
 const emit = defineEmits<{ close: []; deleted: [] }>();
 const dots = useDotsStore();
 const contacts = useContactsStore();
+/** Largura do perfil, ajustavel pela alca na borda esquerda. */
+const column = useColumnWidth("profile", 420, 320, 720);
 /** Cargo, assistente e estado em uma linha: "Gerente de Google Ads · Codex (OpenAI) · supervisor". */
 const subtitle = computed(() => [
   contacts.byDot(props.dot.id)?.title,
@@ -52,7 +56,8 @@ async function remove() {
 </script>
 
 <template>
-  <aside class="flex w-[420px] shrink-0 flex-col overflow-hidden border-l border-zinc-800/80 bg-zinc-950">
+  <aside class="relative flex shrink-0 flex-col overflow-hidden border-l border-zinc-800/80 bg-zinc-950" :style="{ width: `${column.width.value}px` }">
+    <ResizeHandle grows="left" overlay @resize="column.resize" @reset="column.reset" />
     <div class="flex items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
       <template v-if="section">
         <button class="btn-ghost -ml-2 px-2" title="Voltar" @click="section = null"><ChevronLeft :size="18" /></button>

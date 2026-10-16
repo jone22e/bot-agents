@@ -2,11 +2,15 @@
 import { onMounted, onUnmounted, watch } from "vue";
 import { Globe, X } from "lucide-vue-next";
 import type { Dot } from "@dots/shared-types";
+import ResizeHandle from "@/components/ResizeHandle.vue";
+import { useColumnWidth } from "@/composables/useColumnWidth";
 import { useBrowserStore } from "@/stores/browser";
 
 const props = defineProps<{ dot: Dot }>();
 const emit = defineEmits<{ close: [] }>();
 const browser = useBrowserStore();
+/** Largura do painel do computador, ajustavel pela alca na borda esquerda. */
+const column = useColumnWidth("computer", 520, 360, 1100);
 
 onMounted(() => void browser.open(props.dot.id));
 watch(() => props.dot.id, (id) => void browser.open(id));
@@ -14,7 +18,8 @@ onUnmounted(() => void browser.close());
 </script>
 
 <template>
-  <aside class="flex w-[520px] shrink-0 flex-col overflow-hidden border-l border-zinc-800/80 bg-zinc-950">
+  <aside class="relative flex shrink-0 flex-col overflow-hidden border-l border-zinc-800/80 bg-zinc-950" :style="{ width: `${column.width.value}px` }">
+    <ResizeHandle grows="left" overlay @resize="column.resize" @reset="column.reset" />
     <div class="flex items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
       <div class="min-w-0 flex-1">
         <p class="truncate text-sm font-semibold text-zinc-100">Computador de {{ dot.name }}</p>
