@@ -78,13 +78,11 @@ watch(dotId, () => {
 watch(() => runtime.isConnected, (v) => v && load());
 
 // ---------- andamento: tempo desde que o DOT comecou e o que esta fazendo ----------
-const liveSince = ref<number | null>(null);
 const now = ref(Date.now());
 const clock = setInterval(() => (now.value = Date.now()), 1000);
 onUnmounted(() => clearInterval(clock));
-watch(() => chat.busy, (b) => (liveSince.value = b ? Date.now() : null), { immediate: true });
 const elapsed = computed(() => {
-  const s = Math.max(0, Math.round((now.value - (liveSince.value ?? now.value)) / 1000));
+  const s = Math.max(0, Math.round((now.value - (chat.live.since ?? now.value)) / 1000));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 });
 const activity = computed(() => {
@@ -237,6 +235,8 @@ const dictation = useDictation((text) => {
 
 // ---------- envio ----------
 const canCompose = computed(() => !!(draft.value.trim() || pastes.length || pending.length));
+const canStart = computed(() => !!dot.value && chat.dotId === dot.value.id && !!chat.conversationId && !chat.messages.length && !chat.busy && !chat.sending && !canCompose.value);
+const START_MESSAGE = "Comece a trabalhar no objetivo que defini para você. Se faltar alguma informação para iniciar, me pergunte.";
 function clearComposer() {
   draft.value = "";
   pastes.splice(0);
@@ -252,6 +252,12 @@ async function send() {
   scrollToEnd(true);
   await chat.send(body, att);
   await contacts.load();
+}
+async function startWork() {
+  if (!canStart.value) return;
+  await chat.send(START_MESSAGE);
+  await contacts.load();
+  scrollToEnd(true);
 }
 /** "Reenviar mensagem" no cartao de erro: a ultima mensagem sua, com os mesmos anexos */
 async function resend() {
@@ -294,8 +300,9 @@ function autosize() {
         <main ref="thread" class="thread" @scroll="onScroll">
           <div v-if="!rows.length && !chat.busy" class="empty">
             <Avatar :name="dot.name" size="lg" />
-            <h2>O que vamos fazer?</h2>
-            <p>{{ dot.name }} responde aqui e também avisa quando algo acontecer.</p>
+            <h2>Pronto para começar</h2>
+            <p>{{ dot.name }} inicia automaticamente ao ser criado. Se ainda não começou, use o botão para pedir que siga o objetivo definido, ou escreva abaixo.</p>
+            <button v-if="!canCompose" type="button" class="btn-primary mt-1" :disabled="!canStart" @click="startWork">{{ chat.sending ? "Iniciando..." : "Iniciar trabalho" }}</button>
           </div>
           <template v-for="r in rows" :key="r.key">
             <p v-if="r.kind === 'date'" class="day">{{ r.label }}</p>

@@ -4,11 +4,12 @@ import { api, RuntimeError } from "@/api";
 
 export interface LiveState {
   taskId: string | null;
+  since: number | null;
   text: string;
   tools: { name: string; ok: boolean | null }[];
   status: "idle" | "queued" | "running" | "waiting_approval";
 }
-const idle = (): LiveState => ({ taskId: null, text: "", tools: [], status: "idle" });
+const idle = (): LiveState => ({ taskId: null, since: null, text: "", tools: [], status: "idle" });
 
 /** Conversa principal do DOT selecionado (uma thread por contato). */
 export const useChatStore = defineStore("chat", {
@@ -26,20 +27,35 @@ export const useChatStore = defineStore("chat", {
   },
   actions: {
     async open(dotId: string) {
-      if (this.dotId === dotId && this.conversationId) {
-        await this.reload();
-        return;
+      if (this.dotId !== dotId) {
+        this.dotId = dotId;
+        this.conversationId = null;
+        this.messages = [];
+        this.live = idle();
       }
-      this.dotId = dotId;
-      this.conversationId = null;
-      this.messages = [];
-      this.live = idle();
       try {
-        const conv = await api.conversations.main(dotId);
-        this.conversationId = conv.id;
+        if (!this.conversationId) {
+          const conv = await api.conversations.main(dotId);
+          if (this.dotId !== dotId) return;
+          this.conversationId = conv.id;
+        }
+        const conversationId = this.conversationId;
         await this.reload();
-        const active = await api.tasks.list({ conversation_id: conv.id, status: ["QUEUED", "RUNNING", "WAITING_APPROVAL"], limit: 1 });
-        if (active[0]) this.live = { ...idle(), taskId: active[0].id, status: active[0].status === "WAITING_APPROVAL" ? "waiting_approval" : active[0].status === "RUNNING" ? "running" : "queued" };
+        const active = await api.tasks.list({ conversation_id: conversationId, status: ["QUEUED", "RUNNING", "WAITING_APPROVAL"], limit: 1 });
+        if (this.dotId !== dotId || this.conversationId !== conversationId) return;
+        if (active[0]) {
+          const task = active[0];
+          const since = Date.parse(task.started_at ?? task.created_at);
+          const previous = this.live.taskId === task.id ? this.live : idle();
+          this.live = {
+            ...previous,
+            taskId: task.id,
+            since: Number.isFinite(since) ? since : previous.since ?? Date.now(),
+            status: task.status === "WAITING_APPROVAL" ? "waiting_approval" : task.status === "RUNNING" ? "running" : "queued",
+          };
+        } else {
+          this.live = idle();
+        }
         this.error = null;
       } catch (e) {
         this.error = e instanceof RuntimeError ? e.message : String(e);
@@ -56,7 +72,7 @@ export const useChatStore = defineStore("chat", {
       try {
         const { message, task } = await api.conversations.send(this.conversationId, content.trim(), attachments);
         this.messages.push(message);
-        this.live = { ...idle(), taskId: task.id, status: "queued" };
+        this.live = { ...idle(), taskId: task.id, since: Date.now(), status: "queued" };
       } catch (e) {
         this.error = e instanceof RuntimeError ? e.message : String(e);
       } finally {
@@ -69,16 +85,19 @@ export const useChatStore = defineStore("chat", {
     onTaskChanged(p: { id: string; dot_id?: string; status: string }) {
       if (p.dot_id === this.dotId && p.status === "RUNNING" && this.live.status === "idle") {
         // Trabalho iniciado por gatilho/horario/outro DOT nesta conversa.
-        this.live = { ...idle(), taskId: p.id, status: "running" };
+        this.live = { ...idle(), taskId: p.id, since: Date.now(), status: "running" };
         void this.reload();
       }
       if (p.id !== this.live.taskId) return;
-      if (p.status === "RUNNING") this.live.status = "running";
+      if (p.status === "RUNNING") {
+        if (this.live.status === "queued") this.live.since = Date.now();
+        this.live.status = "running";
+      }
       else if (p.status === "WAITING_APPROVAL") this.live.status = "waiting_approval";
       else if (["COMPLETED", "FAILED", "CANCELLED", "WAITING_USER", "QUEUED"].includes(p.status) && p.status !== "QUEUED") void this.finishLive();
     },
     onExecutionEvent(p: { task_id: string; dot_id: string; event: ExecutionEvent }) {
-      if (p.dot_id === this.dotId && this.live.status === "idle") this.live = { ...idle(), taskId: p.task_id, status: "running" };
+      if (p.dot_id === this.dotId && this.live.status === "idle") this.live = { ...idle(), taskId: p.task_id, since: Date.now(), status: "running" };
       if (p.task_id !== this.live.taskId) return;
       const ev = p.event;
       switch (ev.type) {
