@@ -22,3 +22,6 @@ apps/desktop/src-tauri/binaries/
 .DS_Store
 .vscode/*
 !.vscode/extensions.json
+
+# Ajudante nativo (swift build)
+native/macos/Transcribe/.build/
