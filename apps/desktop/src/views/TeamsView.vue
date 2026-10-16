@@ -4,14 +4,20 @@ import { ChevronDown, ChevronRight, Pencil, Plus, Trash2, X } from "lucide-vue-n
 import type { Team } from "@dots/shared-types";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import ErrorBanner from "@/components/ErrorBanner.vue";
+import ModelPicker from "@/components/ModelPicker.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { useDismissalsStore } from "@/stores/dismissals";
 import { useDotsStore } from "@/stores/dots";
+import { useEnginesStore } from "@/stores/engines";
+import { avatarUri } from "@/lib/avatar";
+import { modelLabel } from "@/lib/models";
+import { RuntimeError } from "@/api";
 import { useTeamsStore } from "@/stores/teams";
 
 const teams = useTeamsStore();
 const dots = useDotsStore();
 const dismissals = useDismissalsStore();
+const engines = useEnginesStore();
 const newName = ref("");
 const newManager = ref("");
 const renaming = ref<string | null>(null);
@@ -41,9 +47,26 @@ async function addMember(t: Team, ev: Event) {
   el.value = "";
   if (id) await teams.addMember(t.id, id);
 }
-const soft = ["bg-violet-500/20 text-violet-300", "bg-emerald-500/20 text-emerald-300", "bg-amber-500/20 text-amber-300", "bg-sky-500/20 text-sky-300", "bg-rose-500/20 text-rose-300", "bg-teal-500/20 text-teal-300"];
-const avatarCls = (id: string) => soft[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % soft.length];
-const initial = (id: string) => name(id).charAt(0).toUpperCase();
+const managerDot = (t: Team) => dots.items.find((d) => d.id === t.manager_dot_id) ?? null;
+const defaultModelLabel = (t: Team) => {
+  const engine = managerDot(t)?.primary_engine;
+  const cfg = engine ? engines.byKind(engine) : null;
+  return engine && cfg?.model ? `${modelLabel(engine, cfg.model, cfg.last_detection?.models ?? [])} (padrao em Configuracoes)` : "Modelo padrao do assistente";
+};
+/** Troca o modelo do gerente; o runtime aplica o mesmo modelo a todos os funcionarios da equipe dele. */
+const modelError = ref<string | null>(null);
+const modelTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function setManagerModel(t: Team, model: string) {
+  const id = t.manager_dot_id;
+  if (!id) return;
+  clearTimeout(modelTimers.get(id));
+  // "Outro" emite a cada tecla: espera a digitacao parar
+  modelTimers.set(id, setTimeout(async () => {
+    modelError.value = null;
+    try { await dots.update(id, { model: model.trim() || null }); }
+    catch (e) { modelError.value = e instanceof RuntimeError ? e.message : String(e); }
+  }, 500));
+}
 </script>
 
 <template>
@@ -51,6 +74,7 @@ const initial = (id: string) => name(id).charAt(0).toUpperCase();
     <PageHeader title="Equipes" subtitle="Um gerente delega aos funcionários da equipe dele. O gerente de uma equipe pode ser funcionário de outra, formando a hierarquia." />
     <div class="space-y-5 overflow-y-auto px-6 pb-8">
       <ErrorBanner :message="teams.error" />
+      <ErrorBanner :message="modelError" />
 
       <div class="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-1.5">
         <input v-model="newName" class="h-9 min-w-0 flex-1 bg-transparent px-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none" placeholder="Nova equipe, ex.: Mercado Livre" @keyup.enter="create" />
@@ -78,7 +102,7 @@ const initial = (id: string) => name(id).charAt(0).toUpperCase();
             <div>
               <p class="mb-2 font-mono text-[11px] uppercase tracking-widest text-zinc-500">Gerente</p>
               <div v-if="t.manager_dot_id" class="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold" :class="avatarCls(t.manager_dot_id)">{{ initial(t.manager_dot_id) }}</span>
+                <img :src="avatarUri(t.manager_dot_id)" alt="" class="h-7 w-7 shrink-0 rounded-full" />
                 <span class="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">{{ name(t.manager_dot_id) }}</span>
                 <label class="relative shrink-0 cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">Trocar
                   <select :value="t.manager_dot_id" class="absolute inset-0 cursor-pointer opacity-0" :disabled="teams.busy" @change="teams.setManager(t.id, ($event.target as HTMLSelectElement).value || null)">
@@ -94,13 +118,17 @@ const initial = (id: string) => name(id).charAt(0).toUpperCase();
                 </select>
                 <ChevronDown :size="14" class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500" />
               </div>
+              <div v-if="managerDot(t)" class="mt-2">
+                <ModelPicker :model-value="managerDot(t)!.model ?? ''" :engine="managerDot(t)!.primary_engine ?? ''" :disabled="!managerDot(t)!.primary_engine" :empty-label="defaultModelLabel(t)" @update:model-value="setManagerModel(t, $event)" />
+                <p class="mt-1 text-xs text-zinc-500">{{ managerDot(t)!.primary_engine ? "Modelo da IA do gerente. Ao trocar, vale tambem para todos os funcionarios desta equipe." : "Escolha o assistente de IA do gerente no perfil dele para definir o modelo." }}</p>
+              </div>
             </div>
 
             <div>
               <p class="mb-2 font-mono text-[11px] uppercase tracking-widest text-zinc-500">Funcionários</p>
               <div class="flex flex-wrap items-center gap-2">
                 <span v-for="id in t.member_ids" :key="id" class="flex items-center gap-2 rounded-full bg-zinc-800/80 py-1 pl-1 pr-2 text-sm text-zinc-200" :title="teams.managedBy(id) ? `Gerente de ${teams.managedBy(id)!.name}` : undefined">
-                  <span class="flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold" :class="avatarCls(id)">{{ initial(id) }}</span>
+                  <img :src="avatarUri(id)" alt="" class="h-6 w-6 rounded-full" />
                   {{ name(id) }}<span v-if="teams.managedBy(id)" class="text-xs text-zinc-500">· gerente de {{ teams.managedBy(id)!.name }}</span>
                   <button class="text-zinc-500 hover:text-red-300" title="Tirar da equipe" :disabled="teams.busy" @click="teams.removeMember(id)"><X :size="12" /></button>
                 </span>
