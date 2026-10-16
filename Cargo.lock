@@ -884,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "dots-core"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "chrono",
  "serde",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "dots-engines"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "dirs 6.0.0",
  "dots-core",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "dots-flexi"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "chrono",
  "dots-core",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "dots-ipc"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "dots-core",
  "futures-util",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "dots-storage"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "chrono",
  "dots-core",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "dotsd"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
