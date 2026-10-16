@@ -479,7 +479,8 @@ mod tests {
         assert!(s.contains("NAO repita estes erros") && s.contains("revisar o preco antes de publicar") && s.contains("Milei"), "licoes de demissao entram nas instrucoes");
         assert!(s.contains("Mapa do app: teste"));
         assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");
-        assert!(s.contains("NAO precisa de autorizacao previa do usuario") && s.contains("dots_browser_click"), "navegador sem pedir permissao antes, com as acoes");
+        assert!(s.contains("Use as ferramentas diretamente, sem perguntar antes com dots_ask_user: o runtime pede a aprovacao necessaria") && s.contains("dots_browser_click"), "navegador usa a aprovacao do runtime, com as acoes");
+        assert!(s.contains("o DOTS pedira permissao ao usuario para o dominio antes de abrir"), "site externo exige permissao por dominio");
         assert!(s.contains("\"QA\"") && s.contains("seja rigoroso"));
         assert!(!s.contains("Memorias relevantes") && !s.contains("continuacao"), "system prompt nao carrega nada que mude entre turnos");
         assert!(s.len() < 6000);
