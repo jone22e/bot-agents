@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Brain, ChevronLeft, ChevronRight, Plug, Shield, UserCircle, Users, Zap } from "lucide-vue-next";
+import { Archive, Brain, ChevronLeft, ChevronRight, Copy, Pause, Play, Plug, Shield, Trash2, UserCircle, Users, Zap } from "lucide-vue-next";
 import type { Dot } from "@dots/shared-types";
 import Avatar from "@/components/Avatar.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
@@ -90,13 +90,13 @@ async function remove() {
             </button>
           </li>
         </ul>
-        <div class="mt-5 flex flex-wrap gap-2 text-xs">
-          <button v-if="dot.status === 'active'" class="btn-secondary" @click="dots.pause(dot.id)">Pausar</button>
-          <button v-else class="btn-secondary" @click="dots.resume(dot.id)">Retomar</button>
-          <button class="btn-secondary" @click="dots.duplicate(dot.id)">Duplicar</button>
-          <button class="btn-secondary" @click="dots.archive(dot.id)">Arquivar</button>
-          <button class="btn-danger ml-auto" @click="confirmDelete = true">Excluir...</button>
+        <div class="mt-4 grid grid-cols-3 gap-2">
+          <button v-if="dot.status === 'active'" class="action" @click="dots.pause(dot.id)"><Pause :size="18" /> Pausar</button>
+          <button v-else class="action" @click="dots.resume(dot.id)"><Play :size="18" /> Retomar</button>
+          <button class="action" @click="dots.duplicate(dot.id)"><Copy :size="18" /> Duplicar</button>
+          <button class="action" @click="dots.archive(dot.id)"><Archive :size="18" /> Arquivar</button>
         </div>
+        <button class="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 py-2.5 text-sm font-medium text-red-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300" @click="confirmDelete = true"><Trash2 :size="15" /> Excluir DOT</button>
       </template>
       <DotForm v-else-if="section === 'sobre'" :dot="dot" :saving="saving" @update="onUpdate" @cancel="section = null" />
       <PolicyPanel v-else-if="section === 'permissoes'" :dot-id="dot.id" />
@@ -108,3 +108,10 @@ async function remove() {
     <ConfirmDialog :open="confirmDelete" title="Excluir DOT" :message="`Excluir “${dot.name}” apaga conversas, memoria e historico. Isso nao pode ser desfeito.`" confirm-label="Excluir" danger @confirm="remove" @cancel="confirmDelete = false" />
   </aside>
 </template>
+
+<style scoped>
+.action { display: flex; flex-direction: column; align-items: center; gap: 0.375rem; border-radius: 0.75rem; border: 1px solid var(--color-zinc-800); padding: 0.75rem 0.5rem; font-size: 0.75rem; color: var(--color-zinc-300); transition: background-color 0.15s, color 0.15s; }
+.action:hover { background: var(--color-zinc-900); color: var(--color-zinc-100); }
+.action :deep(svg) { color: var(--color-zinc-400); }
+.action:hover :deep(svg) { color: var(--color-zinc-200); }
+</style>
