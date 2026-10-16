@@ -20,33 +20,7 @@ const draft = ref("");
 const thread = ref<HTMLElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
 
-const MAX_BUBBLE = 420;
-
-/** Respostas extensas viram uma sequencia de bolhas, sem alterar o texto gravado pelo DOT. */
-function splitReply(content: string): string[] {
-  const text = content.trim();
-  if (text.length <= MAX_BUBBLE) return [text];
-  const blocks = text.split(/\n\s*\n/).flatMap((paragraph) => {
-    if (paragraph.length <= MAX_BUBBLE || paragraph.includes("```")) return [paragraph];
-    const parts: string[] = [];
-    for (const line of paragraph.split("\n")) {
-      if (/^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line) && parts.length) parts.push(line);
-      else if (parts.length) parts[parts.length - 1] += `\n${line}`;
-      else parts.push(line);
-    }
-    return parts;
-  });
-  const chunks: string[] = [];
-  for (const block of blocks) {
-    if (!block.trim()) continue;
-    const last = chunks.length - 1;
-    if (last >= 0 && chunks[last]!.length + block.length + 2 <= MAX_BUBBLE) chunks[last] += `\n\n${block}`;
-    else chunks.push(block);
-  }
-  return chunks;
-}
-
-type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage; text: string; first: boolean; last: boolean };
+type Row = { kind: "date"; key: string; label: string } | { kind: "msg"; key: string; g: GroupMessage };
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
   let last = "";
@@ -59,8 +33,7 @@ const rows = computed<Row[]>(() => {
       const label = day === new Date().toDateString() ? "Hoje" : day === new Date(Date.now() - 86400000).toDateString() ? "Ontem" : d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
       out.push({ kind: "date", key: `d-${day}`, label });
     }
-    const parts = g.role === "dot" ? splitReply(g.content) : [g.content];
-    parts.forEach((text, index) => out.push({ kind: "msg", key: `${g.id}-${index}`, g, text, first: index === 0, last: index === parts.length - 1 }));
+    out.push({ kind: "msg", key: g.id, g });
   }
   return out;
 });
@@ -188,16 +161,15 @@ function autosize() {
       </div>
       <template v-for="r in rows" :key="r.key">
         <p v-if="r.kind === 'date'" class="day">{{ r.label }}</p>
-        <div v-else class="message-row" :class="[r.g.role === 'user' ? 'mine' : 'theirs', { continuation: !r.first }]">
-          <Avatar v-if="r.g.role === 'dot' && r.first" :name="r.g.dot_name ?? '?'" size="sm" />
-          <span v-else-if="r.g.role === 'dot'" class="avatar-space" />
+        <div v-else class="message-row" :class="r.g.role === 'user' ? 'mine' : 'theirs'">
+          <Avatar v-if="r.g.role === 'dot'" :name="r.g.dot_name ?? '?'" size="sm" />
           <div class="message-body">
-            <button v-if="r.g.role === 'dot' && r.first" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
+            <button v-if="r.g.role === 'dot'" class="sender" :title="`Abrir a conversa com ${r.g.dot_name}`" @click="r.g.dot_id && router.push(`/chat/${r.g.dot_id}`)">{{ r.g.dot_name }}</button>
             <div class="message-bubble">
-              <div v-if="r.g.role === 'dot'" class="md" @click="onMdClick($event, openUrl)" v-html="md(r.text)" />
-              <p v-else>{{ r.text }}</p>
+              <div v-if="r.g.role === 'dot'" class="md" @click="onMdClick($event, openUrl)" v-html="md(r.g.content)" />
+              <p v-else>{{ r.g.content }}</p>
             </div>
-            <small v-if="r.last">{{ timeOf(r.g) }}</small>
+            <small>{{ timeOf(r.g) }}</small>
           </div>
         </div>
       </template>
@@ -246,15 +218,13 @@ function autosize() {
 .empty h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .empty p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--faint); }
 .day { margin: 8px 0; text-align: center; font-size: 11px; color: var(--faint); }
-.message-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.message-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .message-row.mine { justify-content: flex-end; }
-.message-row.continuation { margin-top: -7px; }
-.avatar-space { width: 28px; flex: none; }
-.message-body { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: min(78%, 720px); min-width: 0; }
+.message-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: min(84%, 760px); min-width: 0; }
 .mine .message-body { align-items: flex-end; }
-.sender { padding: 0 4px; background: transparent; border: 0; color: var(--text); font-size: 12px; font-weight: 600; }
+.sender { padding: 3px 4px 0; background: transparent; border: 0; color: var(--text); font-size: 12px; font-weight: 600; }
 .sender:hover { text-decoration: underline; }
-.message-bubble { padding: 9px 12px; border-radius: 15px 15px 15px 4px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: var(--agent-size); line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+.message-bubble { max-width: 100%; padding: 12px 16px; border-radius: 14px 14px 14px 4px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: var(--agent-size); line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
 .mine .message-bubble { border-radius: 15px 15px 4px 15px; background: var(--panel-2); }
 .message-bubble p { margin: 0; white-space: pre-wrap; }
 .message-bubble :deep(.md > :first-child) { margin-top: 0; }
