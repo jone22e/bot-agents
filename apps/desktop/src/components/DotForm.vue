@@ -5,6 +5,7 @@ import { ENGINE_LABEL, splitPurpose } from "@/lib/humanize";
 import { DOT_TEMPLATES, TRUST_OPTIONS, type DotTemplate } from "@/lib/templates";
 import { useEnginesStore } from "@/stores/engines";
 import { useDotsStore } from "@/stores/dots";
+import { useTeamsStore } from "@/stores/teams";
 import { Dices } from "lucide-vue-next";
 import { randomName } from "@/lib/names";
 import ModelPicker from "@/components/ModelPicker.vue";
@@ -15,6 +16,7 @@ const emit = defineEmits<{ create: [input: DotCreate, trust: "read" | "write" | 
 
 const engines = useEnginesStore();
 const dots = useDotsStore();
+const teams = useTeamsStore();
 /** Sorteia um nome comum que nenhum outro DOT usa. */
 const genName = () => (form.name = randomName(dots.items.filter((d) => d.id !== props.dot?.id).map((d) => d.name), form.name));
 const ready = computed(() => engines.items.filter((e) => e.enabled && e.last_detection?.installed && e.last_detection.auth_status !== "unauthenticated"));
@@ -137,7 +139,7 @@ function submit() {
         <div class="col-span-2">
           <label class="label" for="model">Modelo do assistente</label>
           <ModelPicker id="model" v-model="form.model" :engine="form.engine" :disabled="form.engine === ''" :empty-label="engineDefaultModel ? `${modelLabel(form.engine, engineDefaultModel, engineCatalog)} (padrao em Configuracoes)` : 'Modelo padrao do assistente'" />
-          <p class="mt-1 text-xs text-zinc-500">So para este DOT. O padrao de cada assistente fica em Configuracoes > Assistentes de IA.</p>
+          <p class="mt-1 text-xs text-zinc-500">{{ dot && teams.managedBy(dot.id) ? "Este DOT e gerente: ao trocar o assistente ou o modelo, vale tambem para todos os funcionarios da equipe dele." : "So para este DOT." }} O padrao de cada assistente fica em Configuracoes > Assistentes de IA.</p>
         </div>
       </div>
     </details>
