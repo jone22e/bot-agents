@@ -36,6 +36,14 @@ impl InstanceLock {
     }
 }
 
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        // Um subprocesso pode herdar o descritor antes de exec; fechar apenas
+        // este File manteria o flock ativo ate a ultima referencia ser fechada.
+        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +59,17 @@ mod tests {
         }
         drop(first);
         assert!(InstanceLock::acquire(&p).is_ok());
+    }
+
+    #[test]
+    fn dropping_lock_releases_it_with_a_duplicated_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("runtime.lock");
+        let first = InstanceLock::acquire(&p).ok().expect("primeiro lock");
+        let duplicate = first._file.try_clone().unwrap();
+
+        drop(first);
+        assert!(InstanceLock::acquire(&p).is_ok());
+        drop(duplicate);
     }
 }
