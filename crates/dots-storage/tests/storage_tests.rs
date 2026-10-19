@@ -264,6 +264,52 @@ mod phase2 {
     }
 
     #[test]
+    fn executions_overlapping_a_day_include_crossing_and_running_work() {
+        let (mut s, dot_id) = with_dot();
+        let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Medir tempo".into(), ..Default::default() }, None).unwrap();
+        let before = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
+        let crossing = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 2, None).unwrap();
+        let running = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 3, None).unwrap();
+        s.conn_mut().execute("UPDATE executions SET started_at = ?1, finished_at = ?2 WHERE id = ?3", ("2026-10-18T20:00:00.000Z", "2026-10-18T21:00:00.000Z", &before.id)).unwrap();
+        s.conn_mut().execute("UPDATE executions SET started_at = ?1, finished_at = ?2 WHERE id = ?3", ("2026-10-18T23:00:00.000Z", "2026-10-19T01:00:00.000Z", &crossing.id)).unwrap();
+        s.conn_mut().execute("UPDATE executions SET started_at = ?1 WHERE id = ?2", ("2026-10-19T03:00:00.000Z", &running.id)).unwrap();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-10-19T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2026-10-20T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let ids: Vec<_> = s.executions().list_overlapping(&start, &end).unwrap().into_iter().map(|e| e.id).collect();
+        assert!(!ids.contains(&before.id));
+        assert!(ids.contains(&crossing.id));
+        assert!(ids.contains(&running.id));
+    }
+
+    #[test]
+    fn tool_calls_by_dot_counts_only_calls_recorded_in_the_period() {
+        let (mut s, dot_id) = with_dot();
+        let other_dot = s.dots().create("user", DotCreate { name: "Outro".into(), ..Default::default() }, None).unwrap().id;
+        let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Agir".into(), ..Default::default() }, None).unwrap();
+        let other_task = s.tasks().create(TaskCreate { dot_id: other_dot.clone(), prompt: "Agir".into(), ..Default::default() }, None).unwrap();
+        let execution = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
+        let other_execution = s.executions().create(&other_task.id, &other_dot, EngineKind::Claude, 1, None).unwrap();
+        let call = || ExecutionEvent::ToolCall { call_id: "c".into(), name: "dots_echo".into(), input: serde_json::json!({}) };
+        let yesterday = s.executions().add_event(&execution.id, &call()).unwrap();
+        let today = s.executions().add_event(&execution.id, &call()).unwrap();
+        let text = s.executions().add_event(&execution.id, &ExecutionEvent::Text { text: "oi".into() }).unwrap();
+        let other_today = s.executions().add_event(&other_execution.id, &call()).unwrap();
+        for (id, at) in [
+            (&yesterday.id, "2026-10-18T23:59:00.000Z"),
+            (&today.id, "2026-10-19T00:00:00.000Z"),
+            (&text.id, "2026-10-19T10:00:00.000Z"),
+            (&other_today.id, "2026-10-19T12:00:00.000Z"),
+        ] {
+            s.conn_mut().execute("UPDATE execution_events SET created_at = ?1 WHERE id = ?2", (at, id)).unwrap();
+        }
+        let start = chrono::DateTime::parse_from_rfc3339("2026-10-19T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2026-10-20T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let counts = s.executions().tool_calls_by_dot(&start, &end).unwrap();
+        assert_eq!(counts.get(&dot_id), Some(&1));
+        assert_eq!(counts.get(&other_dot), Some(&1));
+    }
+
+    #[test]
     fn recovery_marks_interrupted() {
         let (mut s, dot_id) = with_dot();
         let a = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "A".into(), retry_safe: Some(true), ..Default::default() }, None).unwrap();

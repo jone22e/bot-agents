@@ -155,6 +155,12 @@ struct EventsParams {
 }
 
 #[derive(Deserialize)]
+struct ExecutionPeriodParams {
+    start_at: Timestamp,
+    end_at: Timestamp,
+}
+
+#[derive(Deserialize)]
 struct ConvCreateParams {
     dot_id: String,
     #[serde(default)]
@@ -622,6 +628,20 @@ impl RuntimeService {
             "executions.recent" => {
                 let LimitParams { limit } = p(params).unwrap_or_default();
                 Ok(json!(self.storage.call(move |s| s.executions().list_recent(limit.min(500))).await?))
+            }
+            "executions.in_period" => {
+                let ExecutionPeriodParams { start_at, end_at } = p(params)?;
+                if start_at >= end_at {
+                    return Err(DotsError::Validation("periodo de execucoes invalido".into()));
+                }
+                Ok(json!(self.storage.call(move |s| s.executions().list_overlapping(&start_at, &end_at)).await?))
+            }
+            "executions.tool_calls_in_period" => {
+                let ExecutionPeriodParams { start_at, end_at } = p(params)?;
+                if start_at >= end_at {
+                    return Err(DotsError::Validation("periodo de execucoes invalido".into()));
+                }
+                Ok(json!(self.storage.call(move |s| s.executions().tool_calls_by_dot(&start_at, &end_at)).await?))
             }
             "executions.events" => {
                 let EventsParams { execution_id, after_seq, limit } = p(params)?;

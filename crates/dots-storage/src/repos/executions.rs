@@ -1,4 +1,6 @@
-use dots_core::{DotsError, DotsResult, EngineKind, Execution, ExecutionEvent, ExecutionEventRecord, ExecutionStatus, new_id};
+use std::collections::HashMap;
+
+use dots_core::{DotsError, DotsResult, EngineKind, Execution, ExecutionEvent, ExecutionEventRecord, ExecutionStatus, Timestamp, new_id};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::{json_or_default, parse_opt_ts, parse_ts, ts};
@@ -73,6 +75,30 @@ impl<'a> ExecutionsRepo<'a> {
             .map_err(storage_err)?;
         let rows = stmt.query_map(params![limit], map).map_err(storage_err)?;
         rows.map(|r| r.map_err(storage_err).and_then(to_exec)).collect()
+    }
+
+    /// Execucoes que cruzam o intervalo [start, end), inclusive as ainda em andamento.
+    pub fn list_overlapping(&self, start: &Timestamp, end: &Timestamp) -> DotsResult<Vec<Execution>> {
+        let mut stmt = self.conn
+            .prepare(&format!("SELECT {COLS} FROM executions WHERE started_at < ?2 AND (finished_at IS NULL OR finished_at > ?1)"))
+            .map_err(storage_err)?;
+        let rows = stmt.query_map(params![ts(start), ts(end)], map).map_err(storage_err)?;
+        rows.map(|r| r.map_err(storage_err).and_then(to_exec)).collect()
+    }
+
+    /// Chamadas de ferramenta registradas no intervalo [start, end), por DOT.
+    pub fn tool_calls_by_dot(&self, start: &Timestamp, end: &Timestamp) -> DotsResult<HashMap<String, u64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT executions.dot_id, COUNT(*)
+             FROM execution_events
+             JOIN executions ON executions.id = execution_events.execution_id
+             WHERE execution_events.type = 'tool_call'
+               AND execution_events.created_at >= ?1
+               AND execution_events.created_at < ?2
+             GROUP BY executions.dot_id",
+        ).map_err(storage_err)?;
+        let rows = stmt.query_map(params![ts(start), ts(end)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))).map_err(storage_err)?;
+        rows.map(|r| r.map_err(storage_err)).collect()
     }
 
     pub fn running(&self) -> DotsResult<Vec<Execution>> {
