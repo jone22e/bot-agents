@@ -2,12 +2,20 @@ use std::collections::HashMap;
 
 use dots_core::{DotsError, DotsResult, EngineKind, Execution, ExecutionEvent, ExecutionEventRecord, ExecutionStatus, Timestamp, new_id};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::Serialize;
 
 use super::{json_or_default, parse_opt_ts, parse_ts, ts};
 use crate::storage_err;
 
 pub struct ExecutionsRepo<'a> {
     conn: &'a mut Connection,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ObservedActivityInterval {
+    pub dot_id: String,
+    pub started_at: Timestamp,
+    pub finished_at: Timestamp,
 }
 
 const COLS: &str = "id, task_id, dot_id, engine, attempt, status, pid, exit_code, engine_session_id, workspace_path, error,
@@ -99,6 +107,79 @@ impl<'a> ExecutionsRepo<'a> {
         ).map_err(storage_err)?;
         let rows = stmt.query_map(params![ts(start), ts(end)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))).map_err(storage_err)?;
         rows.map(|r| r.map_err(storage_err)).collect()
+    }
+
+    /// Intervalos comprovados por chamada e retorno de ferramenta; esperas de aprovacao sao retiradas.
+    pub fn observed_activity(&self, start: &Timestamp, end: &Timestamp) -> DotsResult<Vec<ObservedActivityInterval>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ev.execution_id, e.dot_id, ev.payload_json, ev.created_at
+             FROM executions e JOIN execution_events ev ON ev.execution_id = e.id
+             WHERE e.started_at < ?2 AND (e.finished_at IS NULL OR e.finished_at > ?1)
+               AND ev.type IN ('tool_call', 'tool_result')
+             ORDER BY ev.execution_id, ev.seq",
+        ).map_err(storage_err)?;
+        let rows = stmt.query_map(params![ts(start), ts(end)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+        }).map_err(storage_err)?;
+        let mut open = HashMap::<(String, String), Timestamp>::new();
+        let mut completed = Vec::new();
+        for row in rows {
+            let (execution_id, dot_id, payload, at) = row.map_err(storage_err)?;
+            let at = parse_ts(&at)?;
+            match serde_json::from_str::<ExecutionEvent>(&payload)? {
+                ExecutionEvent::ToolCall { call_id, .. } => {
+                    open.entry((execution_id, call_id)).or_insert(at);
+                }
+                ExecutionEvent::ToolResult { call_id, .. } => {
+                    if let Some(from) = open.remove(&(execution_id.clone(), call_id)) {
+                        if at > from { completed.push((execution_id, dot_id, from, at)); }
+                    }
+                }
+                _ => {}
+            }
+        }
+        drop(stmt);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT a.execution_id, a.requested_at, a.resolved_at
+             FROM approvals a JOIN executions e ON e.id = a.execution_id
+             WHERE e.started_at < ?2 AND (e.finished_at IS NULL OR e.finished_at > ?1)
+               AND a.requested_at < ?2 AND (a.resolved_at IS NULL OR a.resolved_at > ?1)",
+        ).map_err(storage_err)?;
+        let rows = stmt.query_map(params![ts(start), ts(end)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        }).map_err(storage_err)?;
+        let mut waits = HashMap::<String, Vec<(Timestamp, Timestamp)>>::new();
+        let now = dots_core::now();
+        for row in rows {
+            let (execution_id, requested_at, resolved_at) = row.map_err(storage_err)?;
+            let from = parse_ts(&requested_at)?;
+            let to = match resolved_at { Some(at) => parse_ts(&at)?, None => now };
+            if to > from { waits.entry(execution_id).or_default().push((from, to)); }
+        }
+
+        let mut intervals = Vec::new();
+        for (execution_id, dot_id, from, to) in completed {
+            let from = from.max(*start);
+            let to = to.min(*end);
+            if to <= from { continue; }
+            let mut pieces = vec![(from, to)];
+            for (wait_from, wait_to) in waits.get(&execution_id).into_iter().flatten() {
+                pieces = pieces.into_iter().flat_map(|(a, b)| {
+                    if *wait_to <= a || *wait_from >= b { vec![(a, b)] }
+                    else {
+                        let mut remaining = Vec::new();
+                        if *wait_from > a { remaining.push((a, *wait_from)); }
+                        if *wait_to < b { remaining.push((*wait_to, b)); }
+                        remaining
+                    }
+                }).collect();
+            }
+            intervals.extend(pieces.into_iter().map(|(started_at, finished_at)| ObservedActivityInterval {
+                dot_id: dot_id.clone(), started_at, finished_at,
+            }));
+        }
+        Ok(intervals)
     }
 
     pub fn running(&self) -> DotsResult<Vec<Execution>> {

@@ -643,6 +643,13 @@ impl RuntimeService {
                 }
                 Ok(json!(self.storage.call(move |s| s.executions().tool_calls_by_dot(&start_at, &end_at)).await?))
             }
+            "executions.observed_activity_in_period" => {
+                let ExecutionPeriodParams { start_at, end_at } = p(params)?;
+                if start_at >= end_at {
+                    return Err(DotsError::Validation("periodo de execucoes invalido".into()));
+                }
+                Ok(json!(self.storage.call(move |s| s.executions().observed_activity(&start_at, &end_at)).await?))
+            }
             "executions.events" => {
                 let EventsParams { execution_id, after_seq, limit } = p(params)?;
                 Ok(json!(self.storage.call(move |s| s.executions().events(&execution_id, after_seq, limit.min(5000))).await?))

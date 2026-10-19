@@ -28,7 +28,7 @@ pub use conversations::ConversationsRepo;
 pub use dismissals::{DismissalInput, DismissalsRepo};
 pub use dots::DotsRepo;
 pub use engines::EnginesRepo;
-pub use executions::ExecutionsRepo;
+pub use executions::{ExecutionsRepo, ObservedActivityInterval};
 pub use group::{GROUP_ORIGIN_PREFIX, GroupRepo};
 pub use installation::InstallationRepo;
 pub use learned::LearnedRepo;

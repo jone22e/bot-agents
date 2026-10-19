@@ -108,6 +108,7 @@ export const api = {
     recent: (limit = 50) => ipcCall<Execution[]>("executions.recent", { limit }),
     inPeriod: (start_at: string, end_at: string) => ipcCall<Execution[]>("executions.in_period", { start_at, end_at }),
     toolCallsInPeriod: (start_at: string, end_at: string) => ipcCall<Record<string, number>>("executions.tool_calls_in_period", { start_at, end_at }),
+    observedActivityInPeriod: (start_at: string, end_at: string) => ipcCall<{ dot_id: string; started_at: string; finished_at: string }[]>("executions.observed_activity_in_period", { start_at, end_at }),
     events: (execution_id: string, after_seq = 0, limit = 2000) => ipcCall<ExecutionEventRecord[]>("executions.events", { execution_id, after_seq, limit }),
     changes: (id: string) => ipcCall<WorkspaceChange[]>("executions.changes", { id }),
   },
