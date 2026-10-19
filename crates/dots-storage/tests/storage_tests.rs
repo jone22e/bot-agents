@@ -310,6 +310,35 @@ mod phase2 {
     }
 
     #[test]
+    fn observed_activity_uses_completed_calls_and_excludes_approval_waits() {
+        let (mut s, dot_id) = with_dot();
+        let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Medir atividade".into(), ..Default::default() }, None).unwrap();
+        let execution = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
+        s.conn_mut().execute("UPDATE executions SET started_at = ?1, finished_at = ?2 WHERE id = ?3", ("2026-10-18T23:00:00.000Z", "2026-10-19T02:00:00.000Z", &execution.id)).unwrap();
+        let events = [
+            (ExecutionEvent::ToolCall { call_id: "done".into(), name: "tool".into(), input: serde_json::json!({}) }, "2026-10-18T23:50:00.000Z"),
+            (ExecutionEvent::ToolCall { call_id: "done".into(), name: "tool".into(), input: serde_json::json!({}) }, "2026-10-19T00:05:00.000Z"),
+            (ExecutionEvent::ToolResult { call_id: "done".into(), name: "tool".into(), ok: true, output: "ok".into() }, "2026-10-19T01:10:00.000Z"),
+            (ExecutionEvent::ToolCall { call_id: "open".into(), name: "tool".into(), input: serde_json::json!({}) }, "2026-10-19T01:20:00.000Z"),
+        ];
+        for (event, at) in events {
+            let recorded = s.executions().add_event(&execution.id, &event).unwrap();
+            s.conn_mut().execute("UPDATE execution_events SET created_at = ?1 WHERE id = ?2", (at, recorded.id)).unwrap();
+        }
+        let approval = s.approvals().create(&execution.id, &task.id, &dot_id, "tool", &serde_json::json!({}), RiskLevel::Exec, &[], "aprovar", 600).unwrap();
+        s.conn_mut().execute("UPDATE approvals SET requested_at = ?1, resolved_at = ?2 WHERE id = ?3", ("2026-10-19T00:20:00.000Z", "2026-10-19T00:40:00.000Z", approval.id)).unwrap();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-10-19T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2026-10-20T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let activity = s.executions().observed_activity(&start, &end).unwrap();
+        assert_eq!(activity.len(), 2);
+        assert!(activity.iter().all(|interval| interval.dot_id == dot_id));
+        assert_eq!(activity[0].started_at.to_rfc3339(), "2026-10-19T00:00:00+00:00");
+        assert_eq!(activity[0].finished_at.to_rfc3339(), "2026-10-19T00:20:00+00:00");
+        assert_eq!(activity[1].started_at.to_rfc3339(), "2026-10-19T00:40:00+00:00");
+        assert_eq!(activity[1].finished_at.to_rfc3339(), "2026-10-19T01:10:00+00:00");
+    }
+
+    #[test]
     fn recovery_marks_interrupted() {
         let (mut s, dot_id) = with_dot();
         let a = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "A".into(), retry_safe: Some(true), ..Default::default() }, None).unwrap();
