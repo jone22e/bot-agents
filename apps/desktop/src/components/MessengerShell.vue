@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Activity, Blocks, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
+import { Activity, Blocks, Check, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
 import Avatar from "@/components/Avatar.vue";
 import Heartbeat from "@/components/Heartbeat.vue";
 import UsageChip from "@/components/UsageChip.vue";
@@ -48,6 +48,7 @@ const sections = computed<{ key: string; title: string | null; subtitle: string 
 });
 /** Funcionario de uma equipe com gerente: linha compacta. */
 const compact = (s: { managerId: string | null }, c: Contact) => s.managerId !== null && c.dot.id !== s.managerId;
+const statusOf = (c: Contact) => c.state === "attention" ? "waiting" : c.state === "busy" ? "working" : c.done ? "done" : "idle";
 /** Cargo curto na linha compacta: "Agente de Google Ads: Publicacao" -> "Publicacao" (a equipe ja diz a area). */
 const shortTitle = (t: string) => { const i = t.indexOf(":"); return i > 0 ? t.slice(i + 1).trim() : t; };
 const runtime = useRuntimeStore();
@@ -136,7 +137,7 @@ function go(path: string) {
         <p v-if="s.title" class="mt-3 mb-1 flex items-baseline gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500"><span class="truncate">{{ s.title }}</span><span v-if="s.subtitle" class="truncate font-normal normal-case tracking-normal text-zinc-600">{{ s.subtitle }}</span></p>
         <template v-for="c in s.rows" :key="c.dot.id">
         <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
-          <Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" :state="c.state" />
+          <span class="sidebar-avatar compact" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-1.5">
               <span class="max-w-[60%] shrink-0 truncate text-[13px] text-zinc-200">{{ c.dot.name }}</span>
@@ -148,7 +149,7 @@ function go(path: string) {
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
         </button>
         <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
-          <Avatar :name="c.dot.name" :seed="c.dot.id" :state="c.state" />
+          <span class="sidebar-avatar" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline justify-between gap-2">
               <span class="truncate text-sm font-medium text-zinc-100">{{ c.dot.name }}</span>
@@ -175,3 +176,15 @@ function go(path: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.sidebar-avatar { position: relative; display: inline-flex; height: 2.75rem; width: 2.75rem; flex-shrink: 0; align-items: center; justify-content: center; border: 2px solid #52525b; border-radius: 9999px; background: #27272a; }
+.sidebar-avatar.compact { height: 2rem; width: 2rem; }
+.sidebar-avatar.working { border-color: #8b5cf6; }
+.sidebar-avatar.working::after { content: ""; position: absolute; inset: -4px; border-radius: 9999px; border: 3px solid rgb(139 92 246 / 0.25); border-top-color: rgb(139 92 246 / 0.8); animation: spin 1.1s linear infinite; }
+.sidebar-avatar.done { border-color: #22c55e; }
+.sidebar-avatar.waiting { border-color: #f97316; }
+.status-marker { position: absolute; right: -4px; bottom: -4px; display: flex; height: 14px; width: 14px; align-items: center; justify-content: center; border: 2px solid #202027; border-radius: 9999px; background: #22c55e; color: white; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sidebar-avatar.working::after { animation: none; } }
+</style>

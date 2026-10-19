@@ -22,7 +22,7 @@ const timeError = ref(false);
 const actionCounts = ref<Record<string, number>>({});
 const loadedActions = ref(false);
 const actionsError = ref(false);
-const reportExpanded = ref(true);
+const reportExpanded = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 function dayBounds(date: Date) {
@@ -207,7 +207,7 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
           </div>
         </div>
         <div v-if="reportExpanded" id="today-report-details" class="border-t border-zinc-800 px-5 py-5">
-          <div class="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          <div class="flex flex-col gap-4">
             <section v-for="col in columns" :key="col.key" :data-report-group="col.key" class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/35">
               <header class="flex items-center justify-between gap-4 border-b border-zinc-800 px-4 py-4">
                 <div class="min-w-0"><h3 class="truncate text-sm font-semibold text-zinc-100">{{ col.title }}</h3><p class="mt-0.5 text-[11px] text-zinc-500">{{ agentsOf(col).length }} {{ agentsOf(col).length === 1 ? "agente" : "agentes" }}</p></div>

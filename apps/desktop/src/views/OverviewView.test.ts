@@ -20,7 +20,7 @@ describe("relatório da visão geral", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("mostra ações e tempo por grupo e agente e permite recolher o relatório", async () => {
+  it("abre fechado e mostra ações e tempo por grupo e agente ao expandir", async () => {
     const iso = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
     invoke.mockImplementation(async (_command: string, args: { method: string }) => {
       if (args.method === "executions.observed_activity_in_period") return [
@@ -44,22 +44,23 @@ describe("relatório da visão geral", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Tempo ativo observado hoje por DOT");
+    expect(wrapper.findAll(".row .ball img")).toHaveLength(2);
+    expect(wrapper.find(".row .ball img").attributes("src")).toMatch(/^data:image\/svg\+xml/);
+    const toggle = wrapper.find('button[aria-controls="today-report-details"]');
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find("#today-report-details").exists()).toBe(false);
+    expect(wrapper.text()).toContain("2h 20min");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
     const group = wrapper.find('[data-report-group="faturamento"]');
     expect(group.find("header").text()).toContain("Faturamento");
     expect(group.find("header").text()).toContain("2h 20min");
     expect(group.find("header").text()).toContain("5");
     expect(group.find('[data-report-agent="jose"]').text()).toContain("32h 05min");
     expect(group.find('[data-report-agent="bruno"]').text()).toContain("20h 35min");
-    expect(wrapper.findAll(".row .ball img")).toHaveLength(2);
-    expect(wrapper.find(".row .ball img").attributes("src")).toMatch(/^data:image\/svg\+xml/);
-    const toggle = wrapper.find('button[aria-controls="today-report-details"]');
-    expect(toggle.attributes("aria-expanded")).toBe("true");
     await toggle.trigger("click");
     expect(toggle.attributes("aria-expanded")).toBe("false");
     expect(wrapper.find("#today-report-details").exists()).toBe(false);
-    expect(wrapper.text()).toContain("2h 20min");
-    await toggle.trigger("click");
-    expect(wrapper.find('[data-report-group="faturamento"]').exists()).toBe(true);
     expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.observed_activity_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
     expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.tool_calls_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
     wrapper.unmount();
