@@ -20,13 +20,13 @@ describe("relatório da visão geral", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("mostra ações e tempo de cada agente e a soma do grupo", async () => {
+  it("mostra ações e tempo por grupo e agente e permite recolher o relatório", async () => {
     const iso = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
     invoke.mockImplementation(async (_command: string, args: { method: string }) => {
-      if (args.method === "executions.in_period") return [
+      if (args.method === "executions.observed_activity_in_period") return [
         { dot_id: "jose", started_at: iso(18, 23, 30), finished_at: iso(19, 0, 30) },
         { dot_id: "jose", started_at: iso(19, 9), finished_at: iso(19, 10, 20) },
-        { dot_id: "jose", started_at: iso(19, 11, 45), finished_at: null },
+        { dot_id: "jose", started_at: iso(19, 11, 45), finished_at: iso(19, 12) },
         { dot_id: "bruno", started_at: iso(19, 10), finished_at: iso(19, 10, 35) },
       ];
       if (args.method === "executions.tool_calls_in_period") return { jose: 3, bruno: 2 };
@@ -43,13 +43,24 @@ describe("relatório da visão geral", () => {
     const wrapper = mount(OverviewView, { global: { plugins: [router] } });
     await flushPromises();
 
-    const rows = wrapper.findAll("table tbody tr");
-    expect(rows.map((row) => row.findAll("th, td").map((cell) => cell.text()))).toEqual([
-      ["Faturamento", "5", "2h 40min"],
-      ["Jose", "3", "2h 05min"],
-      ["Bruno", "2", "0h 35min"],
-    ]);
-    expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
+    expect(wrapper.text()).toContain("Tempo ativo observado hoje por DOT");
+    const group = wrapper.find('[data-report-group="faturamento"]');
+    expect(group.find("header").text()).toContain("Faturamento");
+    expect(group.find("header").text()).toContain("2h 20min");
+    expect(group.find("header").text()).toContain("5");
+    expect(group.find('[data-report-agent="jose"]').text()).toContain("32h 05min");
+    expect(group.find('[data-report-agent="bruno"]').text()).toContain("20h 35min");
+    expect(wrapper.findAll(".row .ball img")).toHaveLength(2);
+    expect(wrapper.find(".row .ball img").attributes("src")).toMatch(/^data:image\/svg\+xml/);
+    const toggle = wrapper.find('button[aria-controls="today-report-details"]');
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find("#today-report-details").exists()).toBe(false);
+    expect(wrapper.text()).toContain("2h 20min");
+    await toggle.trigger("click");
+    expect(wrapper.find('[data-report-group="faturamento"]').exists()).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.observed_activity_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
     expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.tool_calls_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
     wrapper.unmount();
   });
