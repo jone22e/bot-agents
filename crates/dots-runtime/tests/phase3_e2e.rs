@@ -83,6 +83,18 @@ impl Rt {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
+    async fn wait_delegation(&self, parent_id: &str, id: &str, status: DelegationStatus, timeout: Duration) -> Delegation {
+        let start = Instant::now();
+        loop {
+            let value = self.call("tasks.children", json!({ "id": parent_id })).await;
+            let delegations: Vec<Delegation> = serde_json::from_value(value["delegations"].clone()).unwrap();
+            if let Some(delegation) = delegations.into_iter().find(|d| d.id == id && d.status == status) {
+                return delegation;
+            }
+            assert!(start.elapsed() < timeout, "delegacao {id} nao chegou a {:?}", status);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     async fn wait_event(&mut self, name: &str, timeout: Duration) -> Value {
         let start = Instant::now();
         loop {
@@ -380,19 +392,15 @@ async fn supervisor_sees_stopped_worker_and_resumes_delegation() {
     // o funcionario para (cancelado): a delegacao fica cancelada e o gerente ve isso no status
     rt.call("tasks.cancel", json!({ "id": child.id })).await;
     rt.wait_task(&child.id, &[TaskStatus::Cancelled], Duration::from_secs(15)).await;
-    let v = rt.call("tasks.children", json!({ "id": t.id })).await;
-    let dl: Vec<Delegation> = serde_json::from_value(v["delegations"].clone()).unwrap();
-    assert_eq!(dl[0].status, DelegationStatus::Cancelled);
+    rt.wait_delegation(&t.id, &did, DelegationStatus::Cancelled, Duration::from_secs(15)).await;
     // o gerente retoma: a tarefa volta a fila, roda e a delegacao termina concluida
     let r: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
     let r = rt.wait_task(&r.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
     assert_eq!(r.result_text.as_deref(), Some("RETOMEI"), "{:?}", r.result_text);
     let done = rt.wait_task(&child.id, &[TaskStatus::Completed], Duration::from_secs(40)).await;
     assert_eq!(done.result_text.as_deref(), Some("ACORDEI"));
-    let v = rt.call("tasks.children", json!({ "id": t.id })).await;
-    let dl: Vec<Delegation> = serde_json::from_value(v["delegations"].clone()).unwrap();
-    assert_eq!(dl[0].status, DelegationStatus::Completed);
-    assert_eq!(dl[0].result.as_deref(), Some("ACORDEI"));
+    let delegation = rt.wait_delegation(&t.id, &did, DelegationStatus::Completed, Duration::from_secs(15)).await;
+    assert_eq!(delegation.result.as_deref(), Some("ACORDEI"));
     // so quem delegou pode retomar
     let other = rt.create_dot("Outro", "read", "supervisor").await;
     rt.call("policies.set", json!({ "dot_id": other.id, "patch": { "can_delegate_to": ["*"] } })).await;
