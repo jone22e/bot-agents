@@ -17,9 +17,12 @@ pub struct ExecutionRegistry {
 }
 
 impl ExecutionRegistry {
-    pub fn register(&self, ctx: SharedContext, handle: ExecutionHandle) {
-        self.by_token.lock().unwrap().insert(ctx.token.clone(), ctx.clone());
-        self.handles.lock().unwrap().insert(ctx.execution_id.clone(), handle);
+    pub fn register_context(&self, ctx: SharedContext) {
+        self.by_token.lock().unwrap().insert(ctx.token.clone(), ctx);
+    }
+
+    pub fn register_handle(&self, execution_id: &str, handle: ExecutionHandle) {
+        self.handles.lock().unwrap().insert(execution_id.to_string(), handle);
     }
 
     pub fn unregister(&self, execution_id: &str, token: &str) {

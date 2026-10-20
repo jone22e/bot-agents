@@ -192,9 +192,12 @@ impl RuntimeService {
             env: vec![("DOTS_EXECUTION_TOKEN".into(), token.clone()), ("DOTS_DATA_DIR".into(), self.layout.root.to_string_lossy().to_string())],
         };
 
+        // O CLI pode chamar o gateway logo ao iniciar; o token precisa existir antes do spawn.
+        self.registry.register_context(ctx.clone());
         let (handle, mut stream) = match self.engines.execute(req).await {
             Ok(x) => x,
             Err(e) => {
+                self.registry.unregister(&execution.id, &token);
                 let _ = std::fs::remove_file(&token_file);
                 let (eid, msg) = (execution.id.clone(), e.message().to_string());
                 let _ = self.storage.call(move |s| s.executions().finish(&eid, ExecutionStatus::Failed, None, Some(&msg), None, &json!({}))).await;
@@ -202,8 +205,8 @@ impl RuntimeService {
             }
         };
         let pid = handle.pid;
+        self.registry.register_handle(&execution.id, handle);
         let _ = self.storage.call({ let eid = execution.id.clone(); move |s| s.executions().set_pid(&eid, pid) }).await;
-        self.registry.register(ctx.clone(), handle);
         if task.cancel_requested {
             self.registry.cancel(&execution.id);
         }
