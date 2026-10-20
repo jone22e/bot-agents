@@ -6,7 +6,7 @@ import { DOT_TEMPLATES, TRUST_OPTIONS, type DotTemplate } from "@/lib/templates"
 import { useEnginesStore } from "@/stores/engines";
 import { useDotsStore } from "@/stores/dots";
 import { useTeamsStore } from "@/stores/teams";
-import { Dices } from "lucide-vue-next";
+import { ChevronDown, Dices } from "lucide-vue-next";
 import { randomName } from "@/lib/names";
 import ModelPicker from "@/components/ModelPicker.vue";
 import { modelLabel } from "@/lib/models";
@@ -37,7 +37,6 @@ watch(ready, (r) => { if (!props.dot && form.engine === "" && r[0]) form.engine 
 watch(() => form.engine, () => { form.model = ""; });
 const engineDefaultModel = computed(() => (form.engine ? engines.byKind(form.engine)?.model ?? null : null));
 const engineCatalog = computed(() => (form.engine ? engines.byKind(form.engine)?.last_detection?.models ?? [] : []));
-const advanced = ref(false);
 const error = ref<string | null>(null);
 
 function applyTemplate(t: DotTemplate) {
@@ -67,7 +66,7 @@ function submit() {
 </script>
 
 <template>
-  <form class="max-w-2xl space-y-5" @submit.prevent="submit">
+  <form class="dot-form max-w-2xl space-y-5" @submit.prevent="submit">
     <div v-if="error" class="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">{{ error }}</div>
 
     <div v-if="!dot">
@@ -79,19 +78,19 @@ function submit() {
 
     <div>
       <label class="label" for="name">Nome</label>
-      <div class="flex gap-2">
-        <input id="name" v-model="form.name" class="input" maxlength="80" placeholder="Ex.: Ana" required />
-        <button type="button" class="btn-secondary shrink-0" title="Gerar um nome comum" @click="genName"><Dices :size="15" /> Gerar nome</button>
+      <div class="name-row">
+        <input id="name" v-model="form.name" class="input min-w-0" maxlength="80" placeholder="Ex.: Ana" required />
+        <button type="button" class="btn-secondary shrink-0" title="Gerar um nome comum" aria-label="Gerar nome" @click="genName"><Dices :size="16" /><span class="generate-name-label">Gerar nome</span></button>
       </div>
     </div>
 
     <div>
       <label class="label" for="purpose">O que ele faz</label>
-      <textarea id="purpose" v-model="form.purpose" class="input" rows="6" placeholder="Descreva em portugues o trabalho deste DOT, como faria com uma pessoa nova na equipe."></textarea>
-      <p class="mt-1 text-xs text-zinc-500">Isso vira a identidade permanente do DOT. Voce pode mudar depois.</p>
+      <textarea id="purpose" v-model="form.purpose" class="input resize-y leading-relaxed" rows="6" placeholder="Descreva o trabalho deste DOT como faria com uma pessoa nova na equipe."></textarea>
+      <p class="mt-1.5 text-xs leading-relaxed text-zinc-500">Instruções permanentes do DOT. Você pode editá-las depois.</p>
     </div>
 
-    <div>
+    <div class="border-t border-zinc-800 pt-5">
       <label class="label" for="engine">Assistente de IA que ele usa</label>
       <select id="engine" v-model="form.engine" class="input">
         <option v-for="e in ready" :key="e.kind" :value="e.kind">{{ ENGINE_LABEL[e.kind] }}</option>
@@ -100,9 +99,9 @@ function submit() {
       <p v-if="!ready.length" class="mt-1 text-xs text-amber-300">Nenhum assistente pronto. Veja Configuracoes > Assistentes de IA.</p>
     </div>
 
-    <label class="flex cursor-pointer items-start gap-3 rounded-md border border-zinc-800 p-3 hover:bg-zinc-900/60" :class="form.supervisor ? 'border-indigo-600 bg-zinc-900/60' : ''">
-      <input v-model="form.supervisor" type="checkbox" class="mt-1" />
-      <span><span class="block text-sm text-zinc-100">Este DOT coordena outros (Supervisor)</span><span class="block text-xs text-zinc-500">Divide objetivos, pede trabalho a DOTs da equipe, acompanha e consolida. A equipe e definida na aba Equipe.</span></span>
+    <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3.5 transition-colors hover:bg-zinc-900/60" :class="form.supervisor ? 'border-indigo-500/70 bg-indigo-500/10' : ''">
+      <input v-model="form.supervisor" type="checkbox" class="mt-0.5 shrink-0 accent-indigo-500" />
+      <span class="min-w-0"><span class="block text-sm font-medium text-zinc-100">Gerencia uma equipe</span><span class="mt-1 block text-xs leading-relaxed text-zinc-400">Delega, acompanha e consolida o trabalho dos DOTs da equipe. Defina a equipe na aba Equipe.</span></span>
     </label>
 
     <div v-if="!dot">
@@ -116,37 +115,51 @@ function submit() {
       <p class="mt-1 text-xs text-zinc-500">Pastas e comandos liberados ficam na aba Permissoes depois de criar.</p>
     </div>
 
-    <details class="card" :open="advanced" @toggle="advanced = ($event.target as HTMLDetailsElement).open">
-      <summary class="cursor-pointer text-sm text-zinc-300">Avancado</summary>
-      <div class="mt-4 grid grid-cols-2 gap-4">
-        <div>
+    <details class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/30">
+      <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-zinc-800/40 [&::-webkit-details-marker]:hidden">
+        <span><span class="block text-sm font-medium text-zinc-200">Avançado</span><span class="mt-0.5 block text-xs text-zinc-500">Pasta, limites e modelo</span></span>
+        <ChevronDown :size="16" class="advanced-chevron shrink-0 text-zinc-500 transition-transform" />
+      </summary>
+      <div class="advanced-grid grid grid-cols-2 gap-x-4 gap-y-5 border-t border-zinc-800 px-4 py-4">
+        <div class="col-span-full min-w-0">
           <label class="label" for="workspace">Pasta de trabalho</label>
-          <input id="workspace" v-model="form.workspace_path" class="input font-mono text-xs" placeholder="Vazio = pasta propria criada pelo DOTS" />
+          <input id="workspace" v-model="form.workspace_path" class="input font-mono text-xs" placeholder="Pasta própria do DOTS" />
+          <p class="mt-1.5 text-xs text-zinc-500">Deixe vazio para usar a pasta própria do DOT.</p>
         </div>
-        <div>
-          <label class="label" for="maxsec">Tempo maximo por trabalho (minutos)</label>
+        <div class="min-w-0">
+          <label class="label" for="maxsec">Tempo máximo <span class="normal-case tracking-normal">(min)</span></label>
           <input id="maxsec" :value="Math.round(form.limits.max_execution_seconds / 60)" type="number" min="1" class="input" @input="form.limits.max_execution_seconds = Math.max(60, Number(($event.target as HTMLInputElement).value) * 60)" />
         </div>
-        <div>
-          <label class="label" for="maxcost">Gasto maximo por trabalho (US$)</label>
-          <input id="maxcost" v-model.number="form.limits.max_cost_usd_per_task" type="number" min="0" step="0.5" class="input" placeholder="sem limite" />
-          <p class="mt-1 text-xs text-zinc-500">So o Claude informa custo; os outros informam apenas tokens.</p>
-        </div>
-        <div>
-          <label class="label" for="maxconc">Trabalhos ao mesmo tempo</label>
+        <div class="min-w-0">
+          <label class="label" for="maxconc">Trabalhos simultâneos</label>
           <input id="maxconc" v-model.number="form.limits.max_concurrent_tasks" type="number" min="1" max="4" class="input" />
         </div>
-        <div class="col-span-2">
+        <div class="col-span-full min-w-0">
+          <label class="label" for="maxcost">Gasto máximo por trabalho <span class="normal-case tracking-normal">(US$)</span></label>
+          <input id="maxcost" v-model.number="form.limits.max_cost_usd_per_task" type="number" min="0" step="0.5" class="input" placeholder="Sem limite" />
+          <p class="mt-1.5 text-xs leading-relaxed text-zinc-500">Só o Claude informa custo; os outros assistentes informam apenas tokens.</p>
+        </div>
+        <div class="col-span-full min-w-0 border-t border-zinc-800 pt-4">
           <label class="label" for="model">Modelo do assistente</label>
           <ModelPicker id="model" v-model="form.model" :engine="form.engine" :disabled="form.engine === ''" :empty-label="engineDefaultModel ? `${modelLabel(form.engine, engineDefaultModel, engineCatalog)} (padrao em Configuracoes)` : 'Modelo padrao do assistente'" />
-          <p class="mt-1 text-xs text-zinc-500">{{ dot && teams.managedBy(dot.id) ? "Este DOT e gerente: ao trocar o assistente ou o modelo, vale tambem para todos os funcionarios da equipe dele." : "So para este DOT." }} O padrao de cada assistente fica em Configuracoes > Assistentes de IA.</p>
+          <p class="mt-1.5 text-xs leading-relaxed text-zinc-500">{{ dot && teams.managedBy(dot.id) ? "Ao trocar o assistente ou o modelo, a mudança também vale para a equipe." : "Esta escolha vale só para este DOT." }} O modelo padrão fica em Configurações.</p>
         </div>
       </div>
     </details>
 
-    <div class="flex justify-end gap-2">
+    <div class="form-actions sticky bottom-0 z-10 flex justify-end gap-2 border-t border-zinc-800 bg-zinc-950/95 py-3 backdrop-blur">
       <button type="button" class="btn-secondary" @click="emit('cancel')">Cancelar</button>
       <button type="submit" class="btn-primary" :disabled="saving">{{ saving ? "Salvando..." : dot ? "Salvar" : "Criar DOT" }}</button>
     </div>
   </form>
 </template>
+
+<style scoped>
+.dot-form { container-type: inline-size; }
+.name-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; }
+details[open] .advanced-chevron { transform: rotate(180deg); }
+@container (max-width: 480px) {
+  .generate-name-label { display: none; }
+  .advanced-grid { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
