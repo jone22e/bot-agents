@@ -15,11 +15,14 @@ import TriggersPanel from "@/components/TriggersPanel.vue";
 import { ENGINE_LABEL } from "@/lib/humanize";
 import { useContactsStore } from "@/stores/contacts";
 import { useDotsStore } from "@/stores/dots";
+import { useTeamsStore } from "@/stores/teams";
 
 const props = defineProps<{ dot: Dot }>();
 const emit = defineEmits<{ close: []; deleted: [] }>();
 const dots = useDotsStore();
 const contacts = useContactsStore();
+const teams = useTeamsStore();
+const manages = computed(() => teams.managedBy(props.dot.id));
 /** Largura do perfil, ajustavel pela alca na borda esquerda. */
 const column = useColumnWidth("profile", 420, 320, 720);
 /** Cargo, assistente e estado em uma linha: "Gerente de Google Ads · Codex (OpenAI) · supervisor". */
@@ -91,11 +94,12 @@ async function remove() {
           </li>
         </ul>
         <div class="mt-4 grid grid-cols-3 gap-2">
-          <button v-if="dot.status === 'active'" class="action" @click="dots.pause(dot.id)"><Pause :size="18" /> Pausar</button>
-          <button v-else class="action" @click="dots.resume(dot.id)"><Play :size="18" /> Retomar</button>
+          <button v-if="dot.status === 'active'" class="action" @click="dots.pause(dot.id)"><Pause :size="18" /> {{ manages ? "Pausar equipe" : "Pausar" }}</button>
+          <button v-else class="action" @click="dots.resume(dot.id)"><Play :size="18" /> {{ manages ? "Retomar gerente" : "Retomar" }}</button>
           <button class="action" @click="dots.duplicate(dot.id)"><Copy :size="18" /> Duplicar</button>
           <button class="action" @click="dots.archive(dot.id)"><Archive :size="18" /> Arquivar</button>
         </div>
+        <p v-if="manages && dot.status === 'paused'" class="mt-2 text-xs text-zinc-500">Os funcionarios permanecem pausados ate voce retoma-los individualmente.</p>
         <button class="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 py-2.5 text-sm font-medium text-red-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300" @click="confirmDelete = true"><Trash2 :size="15" /> Excluir DOT</button>
       </template>
       <DotForm v-else-if="section === 'sobre'" :dot="dot" :saving="saving" @update="onUpdate" @cancel="section = null" />

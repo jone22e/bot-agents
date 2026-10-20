@@ -469,8 +469,27 @@ impl RuntimeService {
                     _ => DotStatus::Archived,
                 };
                 let id2 = id.clone();
-                let dot = self.storage.call(move |s| s.dots().set_status(ACTOR_USER, &id2, status)).await?;
+                let pause_team = method == "dots.pause";
+                let (dot, paused_members) = self.storage.call(move |s| {
+                    let members = if pause_team {
+                        s.teams().managed_by(&id2)?.map(|t| t.member_ids).unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
+                    let dot = s.dots().set_status(ACTOR_USER, &id2, status)?;
+                    let mut paused_members = vec![];
+                    for member_id in members {
+                        if s.dots().get(&member_id)?.status == DotStatus::Active {
+                            s.dots().set_status(ACTOR_USER, &member_id, DotStatus::Paused)?;
+                            paused_members.push(member_id);
+                        }
+                    }
+                    Ok((dot, paused_members))
+                }).await?;
                 self.events.emit("dots.changed", json!({ "id": id, "action": status.as_str() }));
+                for member_id in paused_members {
+                    self.events.emit("dots.changed", json!({ "id": member_id, "action": "paused" }));
+                }
                 Ok(json!(dot))
             }
             "dots.delete" => {

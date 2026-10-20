@@ -552,6 +552,30 @@ async fn dismissal_deletes_employee_and_frees_the_slot() {
 }
 
 #[tokio::test]
+async fn pausing_manager_also_pauses_its_active_employees() {
+    let rt = start().await;
+    let manager = rt.create_dot("Chefe", "read", "supervisor").await;
+    let active = rt.create_dot("Ana", "read", "worker").await;
+    let already_paused = rt.create_dot("Bia", "read", "worker").await;
+    let outside = rt.create_dot("Caio", "read", "worker").await;
+    rt.call("teams.create", json!({ "name": "Vendas", "manager_dot_id": manager.id, "member_ids": [active.id, already_paused.id] })).await;
+    rt.call("dots.pause", json!({ "id": already_paused.id })).await;
+
+    rt.call("dots.pause", json!({ "id": manager.id })).await;
+    for id in [&manager.id, &active.id, &already_paused.id] {
+        let dot: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": id })).await).unwrap();
+        assert_eq!(dot.status, DotStatus::Paused, "{id} deve estar pausado");
+    }
+    let independent: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": outside.id })).await).unwrap();
+    assert_eq!(independent.status, DotStatus::Active);
+
+    rt.call("dots.resume", json!({ "id": manager.id })).await;
+    let employee: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": active.id })).await).unwrap();
+    assert_eq!(employee.status, DotStatus::Paused, "retomar o gerente nao retoma funcionarios automaticamente");
+    rt.stop();
+}
+
+#[tokio::test]
 async fn manager_model_change_applies_to_all_employees() {
     let rt = start().await;
     let sup = rt.create_dot("Chefe", "read", "supervisor").await;
