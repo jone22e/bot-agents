@@ -34,7 +34,7 @@ describe("relatório da visão geral", () => {
     });
     useContactsStore().items = [
       { dot: { id: "jose", name: "Jose" }, state: "busy" },
-      { dot: { id: "bruno", name: "Bruno" }, state: "idle" },
+      { dot: { id: "bruno", name: "Bruno", status: "paused" }, state: "busy", done: true },
     ] as Contact[];
     useTeamsStore().items = [{ id: "faturamento", name: "Faturamento", manager_dot_id: "jose", member_ids: ["bruno"] }] as Team[];
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/overview", component: OverviewView }, { path: "/chat/:dotId", component: { template: "<div />" } }] });
@@ -46,6 +46,10 @@ describe("relatório da visão geral", () => {
     expect(wrapper.text()).toContain("Tempo ativo observado hoje por DOT");
     expect(wrapper.findAll(".row .ball img")).toHaveLength(2);
     expect(wrapper.find(".row .ball img").attributes("src")).toMatch(/^data:image\/svg\+xml/);
+    const paused = wrapper.findAll(".row").find((row) => row.text().includes("Bruno"));
+    expect(paused?.find(".ball.paused").exists()).toBe(true);
+    expect(paused?.text()).toContain("Pausado");
+    expect(paused?.find(".ball.working").exists()).toBe(false);
     const toggle = wrapper.find('button[aria-controls="today-report-details"]');
     expect(toggle.attributes("aria-expanded")).toBe("false");
     expect(wrapper.find("#today-report-details").exists()).toBe(false);

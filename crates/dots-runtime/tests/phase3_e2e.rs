@@ -574,6 +574,13 @@ async fn pausing_manager_also_pauses_its_active_employees() {
         let dot: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": id })).await).unwrap();
         assert_eq!(dot.status, DotStatus::Paused, "{id} deve estar pausado");
     }
+    let task: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": active.id, "prompt": "Aguarde" })).await).unwrap();
+    assert_eq!(task.status, TaskStatus::Queued);
+    let contacts: Vec<Contact> = serde_json::from_value(rt.call("contacts.list", json!({})).await).unwrap();
+    let contact = contacts.iter().find(|c| c.dot.id == active.id).unwrap();
+    assert_eq!(contact.state, "idle");
+    assert_eq!(contact.state_text, "Pausado · 1 na fila");
+    assert_eq!(contact.pulse, "idle");
     let independent: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": outside.id })).await).unwrap();
     assert_eq!(independent.status, DotStatus::Active);
 

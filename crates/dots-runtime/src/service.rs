@@ -707,7 +707,19 @@ impl RuntimeService {
                         let asked_manager = pending.iter().find(|a| a.dot_id == dot.id && routed.contains(&a.id)).map(|a| a.kind == dots_core::ApprovalKind::Question);
                         let last_status = s.tasks().list(&TaskFilter { dot_id: Some(dot.id.clone()), limit: 1, ..Default::default() })?.first().map(|t| t.status);
                         let last_failed = last_status == Some(TaskStatus::Failed);
-                        let (state, text) = if reqs > 0 {
+                        let (state, text) = if dot.status == DotStatus::Paused {
+                            let queued = mine.iter().filter(|t| t.status == TaskStatus::Queued).count();
+                            let text = if mine.iter().any(|t| t.status == TaskStatus::Running) {
+                                "Pausado · tarefa atual em andamento".to_string()
+                            } else if reqs > 0 || mine.iter().any(|t| t.status == TaskStatus::WaitingUser || t.status == TaskStatus::WaitingApproval) {
+                                "Pausado · aguardando resposta".to_string()
+                            } else if queued > 0 {
+                                format!("Pausado · {queued} na fila")
+                            } else {
+                                "Pausado".to_string()
+                            };
+                            ("idle", text)
+                        } else if reqs > 0 {
                             ("attention", if pending.iter().any(|a| a.dot_id == dot.id && !routed.contains(&a.id) && a.kind == dots_core::ApprovalKind::Question) { "Fez uma pergunta" } else { "Pede sua permissao" }.to_string())
                         } else if let Some(is_question) = asked_manager {
                             ("busy", if is_question { "Perguntou ao gerente" } else { "Pediu permissao ao gerente" }.to_string())
@@ -717,8 +729,6 @@ impl RuntimeService {
                             ("busy", format!("Trabalhando: {}", t.title))
                         } else if !mine.is_empty() {
                             ("busy", format!("{} na fila", mine.len()))
-                        } else if dot.status == DotStatus::Paused {
-                            ("idle", "Pausado".to_string())
                         } else {
                             ("idle", "Livre".to_string())
                         };
@@ -729,7 +739,9 @@ impl RuntimeService {
                             None => None,
                         };
                         // Batimento (como no ovrgit): trabalhando = firme; esperando alguem = lento; na fila = em espera; falhou = linha reta.
-                        let pulse = if reqs > 0 || asked_manager.is_some() || mine.iter().any(|t| t.status == TaskStatus::WaitingUser || t.status == TaskStatus::WaitingApproval) {
+                        let pulse = if dot.status == DotStatus::Paused {
+                            if mine.iter().any(|t| t.status == TaskStatus::Running) { "live" } else { "idle" }
+                        } else if reqs > 0 || asked_manager.is_some() || mine.iter().any(|t| t.status == TaskStatus::WaitingUser || t.status == TaskStatus::WaitingApproval) {
                             "waiting"
                         } else if mine.iter().any(|t| t.status == TaskStatus::Running) {
                             "live"

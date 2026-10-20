@@ -48,7 +48,8 @@ const sections = computed<{ key: string; title: string | null; subtitle: string 
 });
 /** Funcionario de uma equipe com gerente: linha compacta. */
 const compact = (s: { managerId: string | null }, c: Contact) => s.managerId !== null && c.dot.id !== s.managerId;
-const statusOf = (c: Contact) => c.state === "attention" ? "waiting" : c.state === "busy" ? "working" : c.done ? "done" : "idle";
+const statusOf = (c: Contact) => c.dot.status === "paused" ? "paused" : c.state === "attention" ? "waiting" : c.state === "busy" ? "working" : c.done ? "done" : "idle";
+const stateText = (c: Contact) => c.dot.status === "paused" && !c.state_text.startsWith("Pausado") ? `Pausado · ${c.state_text}` : c.state_text;
 /** Cargo curto na linha compacta: "Agente de Google Ads: Publicacao" -> "Publicacao" (a equipe ja diz a area). */
 const shortTitle = (t: string) => { const i = t.indexOf(":"); return i > 0 ? t.slice(i + 1).trim() : t; };
 const runtime = useRuntimeStore();
@@ -143,7 +144,7 @@ function go(path: string) {
               <span class="max-w-[60%] shrink-0 truncate text-[13px] text-zinc-200">{{ c.dot.name }}</span>
               <span v-if="c.title" class="min-w-0 flex-1 truncate text-[11px] text-zinc-500">{{ shortTitle(c.title) }}</span>
             </span>
-            <span v-if="c.state !== 'idle'" class="block truncate text-[11px]" :class="c.state === 'attention' ? 'text-amber-300' : 'text-sky-300'">{{ c.state_text }}</span>
+            <span v-if="c.dot.status === 'paused' || c.state !== 'idle'" class="block truncate text-[11px]" :class="c.dot.status === 'paused' || c.state === 'attention' ? 'text-amber-300' : 'text-sky-300'">{{ stateText(c) }}</span>
           </span>
           <Heartbeat v-if="toneOf(c.pulse) !== 'idle'" :tone="toneOf(c.pulse)" />
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
@@ -157,7 +158,7 @@ function go(path: string) {
             </span>
             <span v-if="c.title" class="block truncate text-[11px] text-zinc-400">{{ c.title }}</span>
             <span class="flex items-center gap-2">
-              <span class="min-w-0 flex-1 truncate text-xs" :class="c.state === 'attention' ? 'text-amber-300' : c.state === 'busy' ? 'text-sky-300' : 'text-zinc-500'">{{ preview(c) }}</span>
+              <span class="min-w-0 flex-1 truncate text-xs" :class="c.dot.status === 'paused' || c.state === 'attention' ? 'text-amber-300' : c.state === 'busy' ? 'text-sky-300' : 'text-zinc-500'">{{ c.dot.status === 'paused' ? stateText(c) : preview(c) }}</span>
               <Heartbeat v-if="toneOf(c.pulse) !== 'idle'" :tone="toneOf(c.pulse)" />
             </span>
           </span>
@@ -184,6 +185,7 @@ function go(path: string) {
 .sidebar-avatar.working::after { content: ""; position: absolute; inset: -4px; border-radius: 9999px; border: 3px solid rgb(139 92 246 / 0.25); border-top-color: rgb(139 92 246 / 0.8); animation: spin 1.1s linear infinite; }
 .sidebar-avatar.done { border-color: #22c55e; }
 .sidebar-avatar.waiting { border-color: #f97316; }
+.sidebar-avatar.paused { border-color: #fbbf24; }
 .status-marker { position: absolute; right: -4px; bottom: -4px; display: flex; height: 14px; width: 14px; align-items: center; justify-content: center; border: 2px solid #202027; border-radius: 9999px; background: #22c55e; color: white; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sidebar-avatar.working::after { animation: none; } }

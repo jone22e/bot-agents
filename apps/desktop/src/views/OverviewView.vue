@@ -104,15 +104,16 @@ function formatActions(value: number | string) {
   return typeof value === "number" ? value.toLocaleString("pt-BR") : value;
 }
 
-type Status = "working" | "done" | "waiting" | "idle";
+type Status = "working" | "done" | "waiting" | "paused" | "idle";
 const LEGEND: { key: Status; label: string }[] = [
   { key: "working", label: "Trabalhando" },
   { key: "done", label: "Concluído" },
   { key: "waiting", label: "Aguardando você" },
+  { key: "paused", label: "Pausado" },
   { key: "idle", label: "Ocioso" },
 ];
 /** attention = pede algo a voce; busy = trabalhando, na fila ou esperando o gerente; done = ultimo trabalho deu certo. */
-const statusOf = (c: Contact): Status => (c.state === "attention" ? "waiting" : c.state === "busy" ? "working" : c.done ? "done" : "idle");
+const statusOf = (c: Contact): Status => (c.dot.status === "paused" ? "paused" : c.state === "attention" ? "waiting" : c.state === "busy" ? "working" : c.done ? "done" : "idle");
 const label = (s: Status) => LEGEND.find((l) => l.key === s)!.label;
 
 type OverviewColumn = { key: string; title: string; manager: Contact | null; members: Contact[] };
@@ -179,6 +180,7 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
                 <span class="block truncate text-sm font-semibold text-zinc-100">{{ col.manager.dot.name }}</span>
                 <span class="block truncate text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ col.title }}</span>
               </span>
+              <span v-if="col.manager.dot.status === 'paused'" class="shrink-0 text-[10px] font-medium text-amber-300">Pausado</span>
               <span class="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{{ workedToday(col.manager.dot.id) }}</span>
             </button>
             <span v-else class="truncate text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ col.title }}</span>
@@ -187,6 +189,7 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
             <button v-for="c in col.members" :key="c.dot.id" class="row py-2" :title="`${c.dot.name} · ${label(statusOf(c))} · Hoje: ${workedToday(c.dot.id)}`" @click="open(c)">
               <span class="ball" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
               <span class="truncate text-sm text-zinc-200">{{ c.dot.name }}</span>
+              <span v-if="c.dot.status === 'paused'" class="shrink-0 text-[10px] font-medium text-amber-300">Pausado</span>
               <span class="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{{ workedToday(c.dot.id) }}</span>
             </button>
           </div>
@@ -239,11 +242,13 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
 .ball.working::after { content: ""; position: absolute; inset: -4px; border-radius: 9999px; border: 3px solid rgb(139 92 246 / 0.25); border-top-color: rgb(139 92 246 / 0.8); animation: spin 1.1s linear infinite; }
 .ball.done { border-color: #22c55e; }
 .ball.waiting { border-color: #f97316; }
+.ball.paused { border-color: #fbbf24; }
 .status-marker { position: absolute; right: -4px; bottom: -4px; display: flex; height: 14px; width: 14px; align-items: center; justify-content: center; border: 2px solid #202027; border-radius: 9999px; background: #22c55e; color: white; }
 .legend { display: inline-flex; height: 0.75rem; width: 0.75rem; align-items: center; justify-content: center; border-radius: 9999px; color: white; }
 .legend.working { background: #8b5cf6; box-shadow: 0 0 0 2px rgb(139 92 246 / 0.35); }
 .legend.done { background: #22c55e; }
 .legend.waiting { background: #f97316; }
+.legend.paused { background: #fbbf24; }
 .legend.idle { background: #3f3f46; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ball.working::after { animation: none; } }
