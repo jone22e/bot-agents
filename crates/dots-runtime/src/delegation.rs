@@ -325,7 +325,7 @@ impl RuntimeService {
             Ok(x) => x,
             Err(_) => return,
         };
-        if parent.status == TaskStatus::Cancelled {
+        if parent.status == TaskStatus::Cancelled || parent.cancel_requested {
             return;
         }
         if siblings.iter().any(|s| !s.status.is_terminal()) {
@@ -440,7 +440,8 @@ impl RuntimeService {
         for e in execs.iter().filter(|e| e.status == dots_core::ExecutionStatus::Running) {
             signalled |= self.registry.cancel(&e.id);
         }
-        if !signalled && matches!(task.status, TaskStatus::Queued | TaskStatus::WaitingUser) {
+        let cancelled_now = !signalled && matches!(task.status, TaskStatus::Queued | TaskStatus::WaitingUser);
+        if cancelled_now {
             let id2 = id.to_string();
             self.storage.call(move |s| s.tasks().set_status(&id2, TaskStatus::Cancelled, Some("cancelada pelo usuario"))).await?;
         }
@@ -448,7 +449,10 @@ impl RuntimeService {
         for c in children.into_iter().filter(|c| !c.status.is_terminal()) {
             Box::pin(self.cancel_task(&c.id)).await?;
         }
-        self.events.emit("task.changed", json!({ "id": id, "dot_id": task.dot_id, "status": "CANCELLING" }));
+        if cancelled_now {
+            self.on_task_finished(&task, TaskStatus::Cancelled, "", Some("cancelada pelo usuario")).await;
+        }
+        self.events.emit("task.changed", json!({ "id": id, "dot_id": task.dot_id, "status": if cancelled_now { "CANCELLED" } else { "CANCELLING" } }));
         self.scheduler_notify.notify_one();
         Ok(())
     }
