@@ -66,7 +66,7 @@ function run(action: (id: string) => Promise<unknown> | void) {
       <p class="truncate px-3 py-1.5 text-xs font-medium text-zinc-400">{{ dot.name }}</p>
       <button role="menuitem" class="item" @click="run((id) => router.push(`/chat/${id}`))"><MessageSquare :size="15" /> Abrir conversa</button>
       <button v-if="status === 'active'" role="menuitem" class="item" data-action="pause" @click="run((id) => dots.pause(id))"><Pause :size="15" /> {{ manages ? "Pausar equipe" : "Pausar" }}</button>
-      <button v-else role="menuitem" class="item" data-action="resume" @click="run((id) => dots.resume(id))"><Play :size="15" /> {{ manages ? "Retomar gerente" : "Retomar" }}</button>
+      <button v-else role="menuitem" class="item" data-action="resume" @click="run((id) => dots.resume(id))"><Play :size="15" /> {{ manages ? "Retomar equipe" : "Retomar" }}</button>
       <button role="menuitem" class="item" @click="run((id) => dots.duplicate(id))"><Copy :size="15" /> Duplicar</button>
       <div class="my-1 border-t border-zinc-800"></div>
       <button role="menuitem" class="item" @click="run((id) => dots.archive(id))"><Archive :size="15" /> Arquivar</button>

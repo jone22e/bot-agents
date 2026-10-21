@@ -63,7 +63,7 @@ describe("menu de contexto do DOT", () => {
     rightClick(dot("carolina", "paused"));
     await flushPromises();
     const menu = menuEl() as HTMLElement;
-    expect(menu.textContent).toContain("Retomar gerente");
+    expect(menu.textContent).toContain("Retomar equipe");
     expect(menu.querySelector('[data-action="pause"]')).toBeNull();
     (menu.querySelector('[data-action="resume"]') as HTMLButtonElement).click();
     await flushPromises();

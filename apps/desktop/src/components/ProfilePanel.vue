@@ -95,11 +95,11 @@ async function remove() {
         </ul>
         <div class="mt-4 grid grid-cols-3 gap-2">
           <button v-if="dot.status === 'active'" class="action" @click="dots.pause(dot.id)"><Pause :size="18" /> {{ manages ? "Pausar equipe" : "Pausar" }}</button>
-          <button v-else class="action" @click="dots.resume(dot.id)"><Play :size="18" /> {{ manages ? "Retomar gerente" : "Retomar" }}</button>
+          <button v-else class="action" @click="dots.resume(dot.id)"><Play :size="18" /> {{ manages ? "Retomar equipe" : "Retomar" }}</button>
           <button class="action" @click="dots.duplicate(dot.id)"><Copy :size="18" /> Duplicar</button>
           <button class="action" @click="dots.archive(dot.id)"><Archive :size="18" /> Arquivar</button>
         </div>
-        <p v-if="manages && dot.status === 'paused'" class="mt-2 text-xs text-zinc-500">Os funcionarios permanecem pausados ate voce retoma-los individualmente.</p>
+        <p v-if="manages && dot.status === 'paused'" class="mt-2 text-xs text-zinc-500">Retomar o gerente retoma tambem os funcionarios pausados.</p>
         <button class="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 py-2.5 text-sm font-medium text-red-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300" @click="confirmDelete = true"><Trash2 :size="15" /> Excluir DOT</button>
       </template>
       <DotForm v-else-if="section === 'sobre'" :dot="dot" :saving="saving" @update="onUpdate" @cancel="section = null" />
