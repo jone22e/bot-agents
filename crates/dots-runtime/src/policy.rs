@@ -117,7 +117,7 @@ pub fn learn_key(tool: &str, input: &Value) -> Option<(String, String)> {
     }
     let host = url_host(&s("_page_url"));
     match tool {
-        "dots_dismiss_employee" | "dots_hire_employee" | "permission_prompt" => None,
+        "dots_dismiss_employee" | "dots_hire_employee" | "dots_pause_employee" | "dots_resume_employee" | "permission_prompt" => None,
         "dots_browser_click" => {
             let el = s("_element");
             if !el.contains('"') {
@@ -313,6 +313,13 @@ impl ExecutionContext {
                     return Err(DotsError::Validation("informe o nome (name) e a funcao (role) do funcionario".into()));
                 }
                 Ok((RiskLevel::Read, vec![s("name")], format!("contratar {}: {}", s("name"), s("role").chars().take(80).collect::<String>())))
+            }
+            // Pausar/retomar um funcionario da propria equipe e reversivel: gestao, sem aprovacao.
+            "dots_pause_employee" | "dots_resume_employee" => {
+                if s("dot").trim().is_empty() {
+                    return Err(DotsError::Validation("informe o funcionario (dot)".into()));
+                }
+                Ok((RiskLevel::Read, vec![s("dot")], format!("{} {}", if tool == "dots_pause_employee" { "pausar" } else { "retomar" }, s("dot"))))
             }
             // Irreversivel (exclui o funcionario): sempre passa pelo usuario.
             "dots_dismiss_employee" => {

@@ -469,26 +469,26 @@ impl RuntimeService {
                     _ => DotStatus::Archived,
                 };
                 let id2 = id.clone();
-                let pause_team = method == "dots.pause";
-                let (dot, paused_members) = self.storage.call(move |s| {
-                    let members = if pause_team {
-                        s.teams().managed_by(&id2)?.map(|t| t.member_ids).unwrap_or_default()
-                    } else {
-                        vec![]
+                // Pausar o gerente pausa os funcionarios ativos; retomar o gerente retoma os pausados.
+                let (dot, changed_members) = self.storage.call(move |s| {
+                    let members = match status {
+                        DotStatus::Paused | DotStatus::Active => s.teams().managed_by(&id2)?.map(|t| t.member_ids).unwrap_or_default(),
+                        DotStatus::Archived => vec![],
                     };
                     let dot = s.dots().set_status(ACTOR_USER, &id2, status)?;
-                    let mut paused_members = vec![];
+                    let from = if status == DotStatus::Paused { DotStatus::Active } else { DotStatus::Paused };
+                    let mut changed_members = vec![];
                     for member_id in members {
-                        if s.dots().get(&member_id)?.status == DotStatus::Active {
-                            s.dots().set_status(ACTOR_USER, &member_id, DotStatus::Paused)?;
-                            paused_members.push(member_id);
+                        if s.dots().get(&member_id)?.status == from {
+                            s.dots().set_status(ACTOR_USER, &member_id, status)?;
+                            changed_members.push(member_id);
                         }
                     }
-                    Ok((dot, paused_members))
+                    Ok((dot, changed_members))
                 }).await?;
                 self.events.emit("dots.changed", json!({ "id": id, "action": status.as_str() }));
-                for member_id in paused_members {
-                    self.events.emit("dots.changed", json!({ "id": member_id, "action": "paused" }));
+                for member_id in changed_members {
+                    self.events.emit("dots.changed", json!({ "id": member_id, "action": status.as_str() }));
                 }
                 Ok(json!(dot))
             }

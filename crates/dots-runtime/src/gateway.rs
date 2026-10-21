@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use dots_core::automation::event_types as et;
-use dots_core::{ApprovalKind, DotRole, DotsError, DotsResult, ExecutionEvent, MemoryCreate, MemoryKind, RiskLevel, TaskStatus};
+use dots_core::{ApprovalKind, DotRole, DotStatus, DotsError, DotsResult, ExecutionEvent, MemoryCreate, MemoryKind, RiskLevel, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::policy::{Decision, SharedContext};
@@ -320,6 +320,8 @@ impl RuntimeService {
             "dots_schedule_cancel" => self.schedule_cancel_for_dot(ctx, &s("id")).await,
             "dots_dismiss_employee" => self.dismiss_employee(ctx, &s("dot"), &s("reason"), &s("lesson")).await,
             "dots_hire_employee" => self.hire_employee(ctx, &s("name"), &s("role"), &s("instructions")).await,
+            "dots_pause_employee" => self.set_employee_status(ctx, &s("dot"), DotStatus::Paused, &s("reason")).await,
+            "dots_resume_employee" => self.set_employee_status(ctx, &s("dot"), DotStatus::Active, "").await,
             "dots_ask_user" => self.ask_user(ctx, &s("question"), args.get("options").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()).await,
             "dots_answer_question" => self.answer_question(ctx, &s("question_id"), &s("answer")).await,
             "dots_browser_open" => {

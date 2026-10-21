@@ -15,6 +15,7 @@ mod flexi;
 mod flexi_team;
 mod group;
 mod hiring;
+mod staffing;
 mod teams;
 mod gateway;
 mod lock;
