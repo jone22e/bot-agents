@@ -560,7 +560,7 @@ async fn dismissal_deletes_employee_and_frees_the_slot() {
 }
 
 #[tokio::test]
-async fn pausing_manager_also_pauses_its_active_employees() {
+async fn pausing_or_resuming_manager_also_applies_to_its_employees() {
     let rt = start().await;
     let manager = rt.create_dot("Chefe", "read", "supervisor").await;
     let active = rt.create_dot("Ana", "read", "worker").await;
@@ -585,8 +585,49 @@ async fn pausing_manager_also_pauses_its_active_employees() {
     assert_eq!(independent.status, DotStatus::Active);
 
     rt.call("dots.resume", json!({ "id": manager.id })).await;
-    let employee: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": active.id })).await).unwrap();
-    assert_eq!(employee.status, DotStatus::Paused, "retomar o gerente nao retoma funcionarios automaticamente");
+    for id in [&manager.id, &active.id, &already_paused.id] {
+        let dot: Dot = serde_json::from_value(rt.call("dots.get", json!({ "id": id })).await).unwrap();
+        assert_eq!(dot.status, DotStatus::Active, "{id} deve ser retomado junto com o gerente");
+    }
+    rt.stop();
+}
+
+#[tokio::test]
+async fn manager_pauses_and_resumes_its_own_employees() {
+    let rt = start().await;
+    let manager = rt.create_dot("Chefe", "read", "supervisor").await;
+    let ana = rt.create_dot("Ana", "read", "worker").await;
+    let outside = rt.create_dot("Caio", "read", "worker").await;
+    rt.call("teams.create", json!({ "name": "Vendas", "manager_dot_id": manager.id, "member_ids": [ana.id] })).await;
+    let r = &rt;
+    let run = |prompt: &'static str, dot: String| async move {
+        let t: Task = serde_json::from_value(r.call("tasks.create", json!({ "dot_id": dot, "prompt": prompt, "title": "Gestao" })).await).unwrap();
+        r.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await.result_text.unwrap_or_default()
+    };
+    let status_of = |id: String| async move { serde_json::from_value::<Dot>(r.call("dots.get", json!({ "id": id })).await).unwrap().status };
+
+    let r = run(r#"FLEXI:dots_pause_employee:{"dot":"Ana","reason":"aguardar novas instrucoes"}"#, manager.id.clone()).await;
+    assert!(r.starts_with("OK 'Ana' foi pausado"), "{r}");
+    assert_eq!(status_of(ana.id.clone()).await, DotStatus::Paused);
+    let contacts: Vec<Contact> = serde_json::from_value(rt.call("contacts.list", json!({})).await).unwrap();
+    assert_eq!(contacts.iter().find(|c| c.dot.id == ana.id).unwrap().dot.status, DotStatus::Paused);
+
+    let r = run(r#"FLEXI:dots_pause_employee:{"dot":"Ana"}"#, manager.id.clone()).await;
+    assert!(r.starts_with("OK 'Ana' ja estava pausado"), "{r}");
+
+    let r = run(r#"FLEXI:dots_resume_employee:{"dot":"ana"}"#, manager.id.clone()).await;
+    assert!(r.starts_with("OK 'Ana' foi retomado"), "{r}");
+    assert_eq!(status_of(ana.id.clone()).await, DotStatus::Active);
+
+    // Quem nao e da equipe, nem o proprio gerente, nem um funcionario mandando: negados.
+    let r = run(r#"FLEXI:dots_pause_employee:{"dot":"Caio"}"#, manager.id.clone()).await;
+    assert!(r.starts_with("ERRO 'Caio' nao e funcionario da equipe"), "{r}");
+    assert_eq!(status_of(outside.id.clone()).await, DotStatus::Active);
+    let r = run(r#"FLEXI:dots_pause_employee:{"dot":"Chefe"}"#, manager.id.clone()).await;
+    assert!(r.starts_with("ERRO 'Chefe' nao e funcionario"), "{r}");
+    let r = run(r#"FLEXI:dots_pause_employee:{"dot":"Caio"}"#, ana.id.clone()).await;
+    assert!(r.starts_with("ERRO voce nao gerencia nenhuma equipe"), "{r}");
+    assert_eq!(status_of(manager.id.clone()).await, DotStatus::Active);
     rt.stop();
 }
 
