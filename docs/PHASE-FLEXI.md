@@ -30,7 +30,10 @@ Data: 2026-10-15. Plano aprovado em `docs/PHASE-FLEXI-PLAN.md`. Nenhuma alteraca
   (`ads_manager`, `ads_agent`, `publisher`) foram reescritos com esse entendimento.
 - **Navegador no Flexi**: `dots_browser_open` em URL do host da conexao Flexi do DOT e permitido sem "acesso a internet"
   e com risco de leitura; antes de navegar o runtime injeta o cookie `userdata` da conexao no navegador do DOT
-  (`browser_login_for_app`, CDP `Network.setCookie`), entao a pagina abre logada e aparece no painel Computador. Nas
+  (`browser_login_for_app`, CDP `Network.setCookie`), entao a pagina abre logada e aparece no painel Computador. Antes de
+  injetar, confere a sessao em `/api/me` e renova com a senha guardada se expirou (2026-10-21); sem renovacao possivel a
+  ferramenta devolve erro pedindo para reconectar, em vez de mostrar a tela de login ao DOT. `apps.flexi.photo` faz o
+  mesmo: foto com 401 marca a conexao como `needs_login` (aviso na barra lateral). Nas
   execucoes do Codex os servidores MCP do proprio usuario (`cua_repl`, `node_repl`, `computer-use`, `codex_app` e os
   do `config.toml`) sao desligados com `-c mcp_servers.<nome>.command="/usr/bin/true" -c mcp_servers.<nome>.enabled=false`
   (so `enabled=false` falha com "invalid transport" para servidores de plugin; verificado em `codex mcp list`), porque o

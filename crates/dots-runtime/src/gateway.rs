@@ -328,6 +328,7 @@ impl RuntimeService {
                 match self.browser_login_for_app(&ctx.dot_id, &browser, &url).await {
                     Ok(true) => tracing::info!(dot = %ctx.dot_id, "navegador: sessao do app conectado aplicada"),
                     Ok(false) => {}
+                    Err(DotsError::Unauthorized(m)) => return Ok(ToolOutput::err(format!("navegador: {m}"))),
                     Err(e) => tracing::warn!(dot = %ctx.dot_id, error = %e, "navegador: nao foi possivel aplicar a sessao do app"),
                 }
                 match browser.open(&url).await {

@@ -265,7 +265,14 @@ impl RuntimeService {
         use base64::Engine as _;
         let conn = self.storage.call({ let id = id.to_string(); move |s| s.apps().get(&id) }).await?;
         let client = self.flexi_client(&conn).await?;
-        match client.profile_photo().await {
+        let mut result = client.profile_photo().await;
+        if matches!(result, Err(FlexiError::Unauthenticated(_))) {
+            // Sessao caiu: renova com a senha guardada ou marca a conexao como "precisa logar" (aviso na interface).
+            if self.flexi_relogin(&conn, client.clone()).await?.status == ConnectionStatus::Connected {
+                result = client.profile_photo().await;
+            }
+        }
+        match result {
             Ok(Some((mime, bytes))) => {
                 let mime = if mime.starts_with("image/") { mime } else { sniff_image_mime(&bytes).to_string() };
                 Ok(json!({ "data_url": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)) }))
@@ -295,14 +302,30 @@ impl RuntimeService {
         Ok(())
     }
 
-    /// Conexao Flexi usada por um DOT. A conta escolhida para os agentes prevalece sobre vinculos antigos.
     /// Se `url` e do Flexi deste DOT, coloca o cookie de sessao no navegador dele: a pagina abre logada.
+    /// Antes, confere a sessao no Flexi (`/api/me`) e, se expirou, renova com a senha guardada, como nas
+    /// ferramentas `flexi_*`; sem renovacao possivel devolve `Unauthorized` em vez de abrir a tela de login.
     pub async fn browser_login_for_app(&self, dot_id: &str, browser: &crate::browser::Browser, url: &str) -> DotsResult<bool> {
         let Some(conn) = self.flexi_connection_for_dot(dot_id).await? else { return Ok(false) };
         let host = crate::policy::url_host(&conn.base_url);
         let target = crate::policy::url_host(url);
         if host.is_empty() || !(target == host || target.ends_with(&format!(".{host}"))) {
             return Ok(false);
+        }
+        let client = self.flexi_client(&conn).await?;
+        match client.me().await {
+            Ok(_) => {}
+            Err(FlexiError::Unauthenticated(_)) => {
+                let renewed = self.flexi_relogin(&conn, client.clone()).await?;
+                if renewed.status != ConnectionStatus::Connected {
+                    return Err(DotsError::Unauthorized(format!(
+                        "sessao do Flexi expirou e nao foi possivel renovar ({}). Nao tente logar pelo formulario: peca ao usuario para reconectar em Conectar aplicativos.",
+                        renewed.status_detail.unwrap_or_else(|| renewed.status.as_str().to_string())
+                    )));
+                }
+            }
+            // Flexi fora do ar ou erro de rede: segue com o cookie guardado; a propria pagina mostrara o problema.
+            Err(e) => tracing::warn!(connection = %conn.id, error = %e, "navegador: nao foi possivel conferir a sessao do Flexi"),
         }
         let Some(cookie) = self.flexi.secrets.get(&FlexiRegistry::cookie_key(&conn.id)) else { return Ok(false) };
         browser.set_cookie("userdata", &cookie, &conn.base_url).await?;
