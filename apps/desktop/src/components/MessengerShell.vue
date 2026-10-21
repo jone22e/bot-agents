@@ -3,11 +3,14 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Activity, Blocks, Check, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
 import Avatar from "@/components/Avatar.vue";
+import DotContextMenu from "@/components/DotContextMenu.vue";
 import Heartbeat from "@/components/Heartbeat.vue";
 import UsageChip from "@/components/UsageChip.vue";
 import { toneOf } from "@/lib/heartbeat";
 import ResizeHandle from "@/components/ResizeHandle.vue";
 import { useColumnWidth } from "@/composables/useColumnWidth";
+import { useDotMenu } from "@/composables/useDotMenu";
+import { useDragReorder } from "@/composables/useDragReorder";
 import { ACCOUNT_CONNECTION, useAppsStore } from "@/stores/apps";
 import { useSettingsStore } from "@/stores/settings";
 import { useContactsStore } from "@/stores/contacts";
@@ -31,7 +34,7 @@ const sections = computed<{ key: string; title: string | null; subtitle: string 
   const managers = new Set(teams.items.map((t) => t.manager_dot_id).filter((x): x is string => !!x));
   const placed = new Set<string>();
   const out: { key: string; title: string | null; subtitle: string | null; managerId: string | null; rows: Contact[] }[] = [];
-  for (const t of teams.items) {
+  for (const t of teams.ordered) {
     const rows: Contact[] = [];
     const m = t.manager_dot_id ? byId.get(t.manager_dot_id) : undefined;
     if (m) { rows.push(m); placed.add(m.dot.id); }
@@ -55,6 +58,10 @@ const shortTitle = (t: string) => { const i = t.indexOf(":"); return i > 0 ? t.s
 const runtime = useRuntimeStore();
 const settings = useSettingsStore();
 const menu = ref(false);
+/** Botao direito sobre um DOT: acoes rapidas (pausar, retomar, duplicar, arquivar). */
+const dotMenu = useDotMenu();
+/** Arrastar o titulo de uma equipe para cima ou para baixo reordena os grupos (a ordem vale tambem na visao geral). */
+const drag = useDragReorder("y", (from, to, before) => { void teams.reorder(from, to, before); });
 /** Conta do usuario no Flexi (vinculada pelo "Logar com Flexi"): a foto dela aparece na bolinha "EU". */
 const account = computed(() => apps.flexi.find((c) => c.id === settings.items[ACCOUNT_CONNECTION]) ?? null);
 watch(
@@ -134,10 +141,10 @@ function go(path: string) {
             <span class="block truncate text-xs text-zinc-500">{{ groupPreview }}</span>
           </span>
         </button>
-        <template v-for="s in sections" :key="s.key">
-        <p v-if="s.title" class="mt-3 mb-1 flex items-baseline gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500"><span class="truncate">{{ s.title }}</span><span v-if="s.subtitle" class="truncate font-normal normal-case tracking-normal text-zinc-600">{{ s.subtitle }}</span></p>
+        <div v-for="s in sections" :key="s.key" class="team-section" :class="drag.classOf(s.key)" :data-drag-id="s.key !== 'none' ? s.key : undefined">
+        <p v-if="s.title" class="mt-3 mb-1 flex items-baseline gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500" :class="s.key !== 'none' ? 'cursor-grab select-none' : ''" :title="s.key !== 'none' ? 'Arraste para reordenar as equipes' : undefined" @pointerdown="s.key !== 'none' && drag.start($event, s.key)"><span class="truncate">{{ s.title }}</span><span v-if="s.subtitle" class="truncate font-normal normal-case tracking-normal text-zinc-600">{{ s.subtitle }}</span></p>
         <template v-for="c in s.rows" :key="c.dot.id">
-        <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
+        <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)" @contextmenu="dotMenu.open($event, c.dot)">
           <span class="sidebar-avatar compact" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-1.5">
@@ -149,7 +156,7 @@ function go(path: string) {
           <Heartbeat v-if="toneOf(c.pulse) !== 'idle'" :tone="toneOf(c.pulse)" />
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
         </button>
-        <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)">
+        <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)" @contextmenu="dotMenu.open($event, c.dot)">
           <span class="sidebar-avatar" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline justify-between gap-2">
@@ -165,7 +172,7 @@ function go(path: string) {
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
         </button>
         </template>
-        </template>
+        </div>
       </div>
 
     </aside>
@@ -175,6 +182,7 @@ function go(path: string) {
       <slot />
     </main>
     </div>
+    <DotContextMenu />
   </div>
 </template>
 
@@ -188,5 +196,9 @@ function go(path: string) {
 .sidebar-avatar.paused { border-color: #fbbf24; }
 .status-marker { position: absolute; right: -4px; bottom: -4px; display: flex; height: 14px; width: 14px; align-items: center; justify-content: center; border: 2px solid #202027; border-radius: 9999px; background: #22c55e; color: white; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.team-section { border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+.team-section.drag-source { opacity: 0.45; }
+.team-section.drop-before { border-top-color: #8b5cf6; }
+.team-section.drop-after { border-bottom-color: #8b5cf6; }
 @media (prefers-reduced-motion: reduce) { .sidebar-avatar.working::after { animation: none; } }
 </style>

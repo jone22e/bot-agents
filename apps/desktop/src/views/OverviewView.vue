@@ -5,6 +5,8 @@ import { Check, ChevronDown } from "lucide-vue-next";
 import type { Contact } from "@dots/shared-types";
 import { api } from "@/api";
 import Avatar from "@/components/Avatar.vue";
+import { useDotMenu } from "@/composables/useDotMenu";
+import { useDragReorder } from "@/composables/useDragReorder";
 import { useContactsStore } from "@/stores/contacts";
 import { useTeamsStore } from "@/stores/teams";
 
@@ -15,6 +17,10 @@ import { useTeamsStore } from "@/stores/teams";
 const router = useRouter();
 const contacts = useContactsStore();
 const teams = useTeamsStore();
+/** Botao direito sobre um DOT: acoes rapidas (pausar, retomar, duplicar, arquivar). */
+const dotMenu = useDotMenu();
+/** Arrastar o cabecalho de uma coluna para o lado reordena as equipes (mesma ordem da lista de contatos). */
+const drag = useDragReorder("x", (from, to, before) => { void teams.reorder(from, to, before); });
 const activity = ref<{ dot_id: string; started_at: string; finished_at: string }[]>([]);
 const now = ref(Date.now());
 const loadedTimes = ref(false);
@@ -122,7 +128,7 @@ const columns = computed(() => {
   const managers = new Set(teams.items.map((t) => t.manager_dot_id).filter((x): x is string => !!x));
   const placed = new Set<string>();
   const out: OverviewColumn[] = [];
-  for (const t of teams.items) {
+  for (const t of teams.ordered) {
     const manager = t.manager_dot_id ? byId.get(t.manager_dot_id) ?? null : null;
     if (manager) placed.add(manager.dot.id);
     const members = t.member_ids.map((id) => byId.get(id)).filter((c): c is Contact => !!c && !managers.has(c.dot.id) && !placed.has(c.dot.id));
@@ -172,9 +178,9 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
       <p v-if="!columns.length" class="text-sm text-zinc-500">Nenhum DOT ainda.</p>
       <p v-else class="mb-2 text-xs text-zinc-500" title="Tempo entre chamada e retorno de ferramentas, descontadas esperas por aprovação. Raciocínio sem eventos e ferramentas ainda em andamento não entram.">Tempo ativo observado hoje por DOT</p>
       <div v-if="columns.length" class="flex min-w-full w-max rounded-2xl border border-zinc-800 bg-zinc-900/60">
-        <section v-for="col in columns" :key="col.key" class="flex w-60 flex-1 flex-col border-r border-zinc-800 last:border-r-0">
-          <div class="flex h-[72px] items-center border-b border-zinc-800 px-5">
-            <button v-if="col.manager" class="row" :title="`${col.manager.dot.name} · ${label(statusOf(col.manager))} · Hoje: ${workedToday(col.manager.dot.id)}`" @click="open(col.manager)">
+        <section v-for="col in columns" :key="col.key" class="team-column flex w-60 flex-1 flex-col border-r border-zinc-800 last:border-r-0" :class="drag.classOf(col.key)" :data-drag-id="col.key !== 'none' ? col.key : undefined">
+          <div class="flex h-[72px] items-center border-b border-zinc-800 px-5" :class="col.key !== 'none' ? 'cursor-grab' : ''" :title="col.key !== 'none' ? 'Arraste para reordenar as equipes' : undefined" @pointerdown="col.key !== 'none' && drag.start($event, col.key)">
+            <button v-if="col.manager" class="row" :title="`${col.manager.dot.name} · ${label(statusOf(col.manager))} · Hoje: ${workedToday(col.manager.dot.id)}`" @click="open(col.manager)" @contextmenu="dotMenu.open($event, col.manager.dot)">
               <span class="ball" :class="statusOf(col.manager)"><Avatar :name="col.manager.dot.name" :seed="col.manager.dot.id" size="sm" /><span v-if="statusOf(col.manager) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
               <span class="min-w-0 text-left">
                 <span class="block truncate text-sm font-semibold text-zinc-100">{{ col.manager.dot.name }}</span>
@@ -186,7 +192,7 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
             <span v-else class="truncate text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ col.title }}</span>
           </div>
           <div class="flex flex-col gap-1 px-5 py-3">
-            <button v-for="c in col.members" :key="c.dot.id" class="row py-2" :title="`${c.dot.name} · ${label(statusOf(c))} · Hoje: ${workedToday(c.dot.id)}`" @click="open(c)">
+            <button v-for="c in col.members" :key="c.dot.id" class="row py-2" :title="`${c.dot.name} · ${label(statusOf(c))} · Hoje: ${workedToday(c.dot.id)}`" @click="open(c)" @contextmenu="dotMenu.open($event, c.dot)">
               <span class="ball" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
               <span class="truncate text-sm text-zinc-200">{{ c.dot.name }}</span>
               <span v-if="c.dot.status === 'paused'" class="shrink-0 text-[10px] font-medium text-amber-300">Pausado</span>
@@ -250,6 +256,9 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
 .legend.waiting { background: #f97316; }
 .legend.paused { background: #fbbf24; }
 .legend.idle { background: #3f3f46; }
+.team-column.drag-source { opacity: 0.45; }
+.team-column.drop-before { box-shadow: inset 3px 0 0 #8b5cf6; }
+.team-column.drop-after { box-shadow: inset -3px 0 0 #8b5cf6; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ball.working::after { animation: none; } }
 </style>
