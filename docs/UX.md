@@ -116,3 +116,7 @@ O menu principal mantem os sete itens da especificacao.
   conversa do demitido zeram (a conversa nova nasce limpa) e ele volta como funcionario novo na mesma equipe; motivo e licao ficam na tabela
   `dismissals` e entram nas instrucoes de todos os funcionarios da equipe (e do gerente) para ninguem repetir o erro.
   Perfil do DOT > Equipe > Demissoes e a pagina Equipes mostram o historico.
+- **Pausa pelo gerente** (`dots_pause_employee` / `dots_resume_employee`, `crates/dots-runtime/src/staffing.rs`): o gerente
+  pausa e retoma um funcionario da propria equipe sem aprovacao do usuario (reversivel). Pausado, o funcionario nao recebe
+  trabalho novo e o que estava na fila espera. Pelo usuario, pausar o gerente pausa os funcionarios ativos e retomar o
+  gerente retoma os pausados (menu de contexto do botao direito na lista e na Visao geral, ou o perfil do DOT).
