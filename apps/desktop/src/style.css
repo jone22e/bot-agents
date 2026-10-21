@@ -48,6 +48,9 @@ body {
   user-select: none;
 }
 
+/* Enquanto o usuario arrasta uma equipe para reordenar (useDragReorder). */
+body.drag-reordering, body.drag-reordering * { cursor: grabbing !important; }
+
 input, textarea, select { -webkit-user-select: text; user-select: text; }
 
 @layer components {
