@@ -172,6 +172,19 @@ impl RuntimeService {
         Ok(ToolOutput::ok(dots.iter().map(|(d, running)| format!("- {} (id {}): {} | assistente: {} | {}", d.name, d.id, if d.objective.is_empty() { d.description.clone() } else { d.objective.clone() }, d.primary_engine.map(|e| e.as_str()).unwrap_or("nenhum"), if *running > 0 { format!("{running} trabalho(s) em andamento") } else { "livre".into() })).collect::<Vec<_>>().join("\n")))
     }
 
+    /// `dots_notify_user`: grava um aviso para o usuario; fica na tela ate ele clicar. Nao bloqueia.
+    pub async fn notify_user(&self, ctx: &SharedContext, title: &str, detail: &str, action: &str) -> DotsResult<ToolOutput> {
+        let title: String = title.trim().chars().take(120).collect();
+        if title.is_empty() {
+            return Ok(ToolOutput::err("informe title: o que aconteceu, em uma frase curta".into()));
+        }
+        let (did, tid) = (ctx.dot_id.clone(), ctx.task_id.clone());
+        let (detail, action): (String, String) = (detail.trim().chars().take(200).collect(), action.trim().chars().take(30).collect());
+        let n = self.storage.call(move |st| st.notifications().create(&did, Some(&tid), &title, &detail, &action)).await?;
+        self.events.emit("notification.changed", json!({ "id": n.id, "dot_id": n.dot_id, "status": n.status }));
+        Ok(ToolOutput::ok(format!("aviso enviado ao usuario ({}): {}. Ele fica na tela ate o usuario clicar; nao repita.", n.id, n.title)))
+    }
+
     /// `dots_ask_user`: registra a pergunta; a resposta volta numa tarefa de continuacao.
     /// Em um pedido delegado, a pergunta vai para quem delegou (o gerente), que responde com
     /// `dots_answer_question`; o usuario so e envolvido se o gerente decidir perguntar a ele.

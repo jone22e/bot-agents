@@ -792,3 +792,28 @@ async fn approved_once_the_same_kind_of_action_does_not_ask_again() {
     assert!(learned.is_empty(), "negada nao aprende");
     rt.stop();
 }
+
+#[tokio::test]
+async fn dot_notifies_the_user_and_the_notice_stays_until_cleared() {
+    let mut rt = start().await;
+    let a = rt.create_dot("Carolina", "read", "worker").await;
+    let b = rt.create_dot("Rafael", "read", "worker").await;
+    assert!(run_task(&rt, &a, r#"FLEXI:dots_notify_user:{"title":"  "}"#.into()).await.starts_with("ERRO informe title"));
+    let r = run_task(&rt, &a, r#"FLEXI:dots_notify_user:{"title":"AGY terminou com status ERROR","detail":"aguardando decisao","action":"Responder"}"#.into()).await;
+    assert!(r.starts_with("OK aviso enviado ao usuario"), "{r}");
+    let ev = rt.wait_event("notification.changed", Duration::from_secs(10)).await;
+    assert_eq!(ev["dot_id"].as_str(), Some(a.id.as_str()));
+    assert!(run_task(&rt, &b, r#"FLEXI:dots_notify_user:{"title":"3 notas nao transmitidas","action":"Ver notas"}"#.into()).await.starts_with("OK"));
+    let list: Vec<Notification> = serde_json::from_value(rt.call("notifications.list", json!({ "pending_only": true })).await).unwrap();
+    assert_eq!(list.iter().map(|n| (n.dot_name.as_str(), n.title.as_str(), n.action.as_str())).collect::<Vec<_>>(), vec![("Carolina", "AGY terminou com status ERROR", "Responder"), ("Rafael", "3 notas nao transmitidas", "Ver notas")]);
+    assert_eq!(list[0].detail, "aguardando decisao");
+    assert!(list[0].task_id.is_some(), "a tarefa de origem fica ligada ao aviso");
+    // Nada expira sozinho: so o clique do usuario limpa.
+    assert_eq!(rt.call("notifications.clear", json!({ "id": list[0].id })).await["cleared"], 1);
+    let list: Vec<Notification> = serde_json::from_value(rt.call("notifications.list", json!({ "pending_only": true })).await).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(rt.call("notifications.clear", json!({})).await["cleared"], 1);
+    let list: Vec<Notification> = serde_json::from_value(rt.call("notifications.list", json!({ "pending_only": true })).await).unwrap();
+    assert!(list.is_empty());
+    rt.stop();
+}

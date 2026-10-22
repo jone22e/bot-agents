@@ -304,6 +304,7 @@ impl ExecutionContext {
             "dots_delegate" => Ok((RiskLevel::Read, vec![s("to")], format!("delegar a {}: {}", s("to"), s("request").chars().take(60).collect::<String>()))),
             "dots_cancel_delegation" => Ok((RiskLevel::Read, vec![s("id")], "cancelar delegacao".into())),
             "dots_ask_user" => Ok((RiskLevel::Read, vec![], format!("perguntar: {}", s("question").chars().take(60).collect::<String>()))),
+            "dots_notify_user" => Ok((RiskLevel::Read, vec![], format!("avisar o usuario: {}", s("title").chars().take(60).collect::<String>()))),
             "dots_resume_delegation" => Ok((RiskLevel::Read, vec![], format!("retomar delegacao {}", s("id")))),
             "dots_decide_approval" => Ok((RiskLevel::Read, vec![], format!("decidir permissao do funcionario ({}): {}", s("approved"), s("approval_id")))),
             "dots_answer_question" => Ok((RiskLevel::Read, vec![], format!("responder ao funcionario: {}", s("answer").chars().take(60).collect::<String>()))),

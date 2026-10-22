@@ -3,6 +3,7 @@ import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import MessengerShell from "@/components/MessengerShell.vue";
 import ManagerRequestAlert from "@/components/ManagerRequestAlert.vue";
+import NotificationPill from "@/components/NotificationPill.vue";
 import { useRuntimeEvents } from "@/composables/useRuntimeEvents";
 import { Download, X } from "lucide-vue-next";
 import { useRuntimeStore } from "@/stores/runtime";
@@ -55,6 +56,7 @@ async function retry() {
       <button class="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200" title="Depois (instala ao fechar o app)" @click="updater.dismissed = true"><X :size="14" /></button>
     </div>
     <ManagerRequestAlert v-if="ready && !needsOnboarding" />
+    <NotificationPill v-if="ready && !needsOnboarding" />
     <div class="min-h-0 flex-1">
       <div v-if="!ready || (needsOnboarding && !bare)" class="flex h-full items-center justify-center bg-zinc-950 p-8">
         <div class="card w-full max-w-sm text-center">

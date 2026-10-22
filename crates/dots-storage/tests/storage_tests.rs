@@ -608,3 +608,23 @@ fn dismissal_is_recorded_and_memory_is_wiped() {
     assert_eq!(kept.len(), 1);
     assert!(kept[0].dot_id.is_none() && kept[0].dot_name == "Lula");
 }
+
+#[test]
+fn notifications_stay_pending_until_cleared() {
+    let mut s = Storage::open_in_memory().unwrap();
+    let dot = s.dots().create("user", DotCreate { name: "Carolina".into(), ..Default::default() }, None).unwrap();
+    assert!(s.notifications().create(&dot.id, None, "   ", "", "").is_err(), "titulo obrigatorio");
+    let first = s.notifications().create(&dot.id, None, " AGY terminou com ERROR ", "aguardando decisao", "Responder").unwrap();
+    let second = s.notifications().create(&dot.id, None, "3 notas nao transmitidas", "", "").unwrap();
+    assert_eq!((first.dot_name.as_str(), first.title.as_str(), first.detail.as_str(), first.action.as_str(), first.status.as_str()), ("Carolina", "AGY terminou com ERROR", "aguardando decisao", "Responder", "pending"));
+    assert_eq!(s.notifications().list(true, 0).unwrap().iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), vec![first.id.as_str(), second.id.as_str()], "mais antiga primeiro");
+    assert_eq!(s.notifications().clear(Some(&first.id)).unwrap(), 1);
+    assert_eq!(s.notifications().clear(Some(&first.id)).unwrap(), 0, "ja limpa nao conta de novo");
+    let pending = s.notifications().list(true, 0).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, second.id);
+    assert!(s.notifications().get(&first.id).unwrap().cleared_at.is_some());
+    assert_eq!(s.notifications().clear(None).unwrap(), 1);
+    assert!(s.notifications().list(true, 0).unwrap().is_empty());
+    assert_eq!(s.notifications().list(false, 0).unwrap().len(), 2, "o historico fica");
+}

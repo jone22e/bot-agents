@@ -46,6 +46,7 @@ export type { Memory } from "./generated/Memory";
 export type { MemoryCreate } from "./generated/MemoryCreate";
 export type { MemoryKind } from "./generated/MemoryKind";
 export type { MemoryUpdate } from "./generated/MemoryUpdate";
+export type { Notification } from "./generated/Notification";
 export type { Message } from "./generated/Message";
 export type { MessageRole } from "./generated/MessageRole";
 export type { ProcessSample } from "./generated/ProcessSample";

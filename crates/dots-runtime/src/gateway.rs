@@ -324,6 +324,7 @@ impl RuntimeService {
             "dots_resume_employee" => self.set_employee_status(ctx, &s("dot"), DotStatus::Active, "").await,
             "dots_ask_user" => self.ask_user(ctx, &s("question"), args.get("options").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()).await,
             "dots_answer_question" => self.answer_question(ctx, &s("question_id"), &s("answer")).await,
+            "dots_notify_user" => self.notify_user(ctx, &s("title"), &s("detail"), &s("action")).await,
             "dots_browser_open" => {
                 let url = s("url");
                 let browser = self.browsers.get(&ctx.dot_id, &self.browser_options().await).await?;
