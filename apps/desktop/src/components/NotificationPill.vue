@@ -72,7 +72,7 @@ async function clearAll() {
       <div v-if="!open" class="flex items-center gap-3 rounded-full border border-zinc-700/80 bg-zinc-950/95 py-1.5 pl-1.5 pr-1.5 text-sm text-zinc-100 shadow-2xl backdrop-blur" data-testid="notification-pill">
         <button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" :title="open ? 'Fechar' : 'Ver os avisos'" @click="open = !open">
           <span class="flex shrink-0 items-center">
-            <span v-for="(id, i) in dots.slice(0, 2)" :key="id" class="rounded-full ring-2 ring-violet-500" :class="i ? '-ml-2' : ''"><Avatar :name="items.find((n) => n.dot_id === id)?.dot_name ?? '?'" :seed="id" size="sm" /></span>
+            <span v-for="(id, i) in dots.slice(0, 2)" :key="id" class="flex rounded-full ring-2 ring-violet-500" :class="i ? '-ml-2' : ''"><Avatar :name="items.find((n) => n.dot_id === id)?.dot_name ?? '?'" :seed="id" size="sm" /></span>
           </span>
           <span class="min-w-0 flex-1">
             <span class="block truncate font-semibold">{{ headline }}</span>
@@ -89,7 +89,7 @@ async function clearAll() {
         </div>
         <ul class="max-h-[60vh] overflow-y-auto pb-1.5">
           <li v-for="n in items" :key="n.id" class="flex items-center gap-3 px-3 py-2 hover:bg-zinc-900/80">
-            <span class="shrink-0 rounded-full ring-2 ring-violet-500"><Avatar :name="n.dot_name" :seed="n.dot_id" size="sm" /></span>
+            <span class="flex shrink-0 rounded-full ring-2 ring-violet-500"><Avatar :name="n.dot_name" :seed="n.dot_id" size="sm" /></span>
             <span class="min-w-0 flex-1">
               <span class="block truncate font-semibold">{{ n.dot_name }} precisa de você</span>
               <span class="block truncate text-xs text-zinc-400">{{ summary(n) }}</span>
