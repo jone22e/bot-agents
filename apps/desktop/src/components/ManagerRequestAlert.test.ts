@@ -23,7 +23,7 @@ function question(id: string, dotId: string, name: string): Approval {
     summary: `Publicar o lote ${id}?`, options: ["Publicar agora", "Revisar antes"],
     tool: "ask_user", input: {}, risk: "read", resources: [], execution_id: "e1", task_id: "t1",
     conversation_id: "c1", requested_at: "2026-10-16T17:00:00Z", expires_at: "2026-10-17T17:00:00Z",
-    resolved_at: null, reason: null,
+    confidence_percent: null, reversible: null, resolved_at: null, reason: null,
   };
 }
 

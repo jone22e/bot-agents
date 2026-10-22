@@ -155,13 +155,34 @@ pub struct Approval {
     pub resources: Vec<String>,
     pub summary: String,
     /// Avaliacao declarada pelo agente antes da acao; ausente em pedidos antigos ou sem avaliacao.
+    #[serde(default)]
     pub confidence_percent: Option<u8>,
+    #[serde(default)]
     pub reversible: Option<bool>,
     pub status: ApprovalStatus,
     pub requested_at: Timestamp,
     pub expires_at: Timestamp,
     pub resolved_at: Option<Timestamp>,
     pub reason: Option<String>,
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::Approval;
+    use serde_json::json;
+
+    #[test]
+    fn aprovacoes_antigas_sem_avaliacao_continuam_legiveis() {
+        let old = json!({
+            "id": "a1", "kind": "permission", "options": [], "execution_id": "e1", "task_id": "t1",
+            "conversation_id": null, "dot_id": "d1", "dot_name": "DOT", "tool": "dots_write_file",
+            "input": {}, "risk": "write", "resources": [], "summary": "Escrever arquivo",
+            "status": "pending", "requested_at": "2026-10-22T12:00:00Z", "expires_at": "2026-10-22T12:10:00Z",
+            "resolved_at": null, "reason": null
+        });
+        let parsed: Approval = serde_json::from_value(old).unwrap();
+        assert_eq!((parsed.confidence_percent, parsed.reversible), (None, None));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

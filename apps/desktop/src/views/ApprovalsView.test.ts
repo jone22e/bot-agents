@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(
 
 import ApprovalsView from "./ApprovalsView.vue";
 
-const base = { execution_id: "e1", task_id: "t1", conversation_id: "c1", options: [], resources: [], input: {}, status: "pending", resolved_at: null, reason: null, expires_at: "2026-10-22T20:00:00Z" } as const;
+const base = { execution_id: "e1", task_id: "t1", conversation_id: "c1", options: [], resources: [], input: {}, status: "pending", confidence_percent: null, reversible: null, resolved_at: null, reason: null, expires_at: "2026-10-22T20:00:00Z" } as const;
 const permission = (id: string, at: string): Approval => ({ ...base, id, kind: "permission", dot_id: "rafa", dot_name: "Rafael", tool: "dots_run_command", input: { command: "rm -rf build" }, risk: "exec", resources: ["/tmp/build"], summary: "rodar rm -rf build", requested_at: at });
 const question = (id: string, at: string): Approval => ({ ...base, id, kind: "question", dot_id: "carol", dot_name: "Carolina", tool: "ask_user", input: {}, risk: "read", options: ["Publicar agora", "Revisar antes"], summary: "Publico o lote?", requested_at: at });
 
