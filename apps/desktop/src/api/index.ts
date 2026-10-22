@@ -1,6 +1,6 @@
 import type {
   AgySetupStatus, AppConnection, Approval, CliUpdateInfo, CliUpdates, Dismissal, UsageInfo, DotIntegration, DotTeamInfo, FlexiConnectInput, FlexiRoleTemplate, Team, TeamCreate, TeamUpdate, Contact, Checkpoint, Delegation, EventRecord, EventSubscription, RuntimeStats, Schedule, ScheduleCreate, ScheduleUpdate, SubscriptionCreate, SubscriptionUpdate, AuditLog, Conversation, Dot, DotCreate, DotUpdate, DotWorkspace, EngineConfiguration, EngineDetection,
-  EngineKind, Execution, ExecutionEventRecord, GroupMessage, Installation, LearnedPermission, Memory, MemoryCreate, MemoryKind, MemoryUpdate, Message, Overview,
+  EngineKind, Execution, ExecutionEventRecord, GroupMessage, Installation, LearnedPermission, Memory, MemoryCreate, MemoryKind, MemoryUpdate, Message, Notification, Overview,
   RuntimeStatus, Setting, Task, TaskCreate, TaskStatus, ToolPolicy, ToolPolicyUpdate, WorkspaceChange,
 } from "@dots/shared-types";
 import { ipcCall } from "./ipc";
@@ -14,6 +14,14 @@ export interface FlexiBrowserLogin {
   authorize_url: string;
   expires_at: string | null;
   poll_interval_ms: number;
+}
+
+/** Canal WebSocket entre o runtime e o Flexi web (IPC `apps.flexi.link_status`, evento `flexi_link.changed`). */
+export interface FlexiLinkStatus {
+  connected: boolean;
+  since: string | null;
+  last_error: string | null;
+  base_url: string | null;
 }
 
 /** Estado do navegador proprio de um DOT (IPC `browser.status`). */
@@ -134,6 +142,11 @@ export const api = {
     list: (pendingOnly = false, limit = 200) => ipcCall<Approval[]>("approvals.list", { pending_only: pendingOnly, limit }),
     decide: (id: string, approved: boolean, reason?: string) => ipcCall<Approval>("approvals.decide", { id, approved, reason: reason ?? null }),
   },
+  notifications: {
+    list: (pendingOnly = true, limit = 100) => ipcCall<Notification[]>("notifications.list", { pending_only: pendingOnly, limit }),
+    /** Sem `id`, limpa todas as pendentes. */
+    clear: (id?: string) => ipcCall<{ cleared: number }>("notifications.clear", { id: id ?? null }),
+  },
   memories: {
     list: (dot_id: string, kind?: MemoryKind, query?: string, limit = 200) => ipcCall<Memory[]>("memories.list", { dot_id, kind: kind ?? null, query: query ?? null, limit }),
     create: (input: MemoryCreate) => ipcCall<Memory>("memories.create", input),
@@ -181,6 +194,8 @@ export const api = {
     flexiBrowserCancel: (token: string) => ipcCall<{ ok: boolean }>("apps.flexi.browser_cancel", { token }),
     flexiPhoto: (id: string) => ipcCall<{ data_url: string | null }>("apps.flexi.photo", { id }),
     flexiTemplates: () => ipcCall<FlexiRoleTemplate[]>("apps.flexi.templates"),
+    /** Canal WebSocket entre o runtime e o Flexi web (ADR 0015). */
+    flexiLinkStatus: () => ipcCall<FlexiLinkStatus>("apps.flexi.link_status"),
     flexiCreateTeam: (id: string) => ipcCall<{ created: { template: string; dot_id: string }[] }>("apps.flexi.create_team", { id }),
     integration: (dot_id: string, kind = "flexi") => ipcCall<DotIntegration | null>("dots.integration", { dot_id, kind }),
     assignRole: (dot_id: string, connection_id: string, opts: { template_id?: string | null; group: string | null; role: "worker" | "supervisor" }) =>

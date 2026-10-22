@@ -1,7 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { onMounted, onUnmounted } from "vue";
 import type { Approval, ExecutionEventPayload, RuntimeEvent, RuntimeInfo } from "@dots/shared-types";
-import type { BrowserFrame } from "@/api";
+import type { BrowserFrame, FlexiLinkStatus } from "@/api";
 import { useAppsStore } from "@/stores/apps";
 import { useApprovalsStore } from "@/stores/approvals";
 import { useAutomationStore } from "@/stores/automation";
@@ -15,6 +15,7 @@ import { useDotsStore } from "@/stores/dots";
 import { useEnginesStore } from "@/stores/engines";
 import { useGroupStore } from "@/stores/group";
 import { useMemoriesStore } from "@/stores/memories";
+import { useNotificationsStore } from "@/stores/notifications";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useSettingsStore } from "@/stores/settings";
 import { useTasksStore } from "@/stores/tasks";
@@ -41,10 +42,11 @@ export function useRuntimeEvents() {
   const usage = useUsageStore();
   const group = useGroupStore();
   const policies = usePoliciesStore();
+  const notifications = useNotificationsStore();
   const unlisteners: UnlistenFn[] = [];
 
   async function loadAll() {
-    await Promise.allSettled([settings.load(), dots.load(), engines.load(), contacts.load(), approvals.load(), tasks.loadActive(), apps.load(), teams.load(), usage.load(), group.load()]);
+    await Promise.allSettled([settings.load(), dots.load(), engines.load(), contacts.load(), approvals.load(), tasks.loadActive(), apps.load(), teams.load(), usage.load(), group.load(), notifications.load()]);
   }
 
   async function handle(payload: RuntimeEvent) {
@@ -72,6 +74,9 @@ export function useRuntimeEvents() {
       case "approval.requested":
         approvals.onRequested(payload.payload as Approval);
         await contacts.load();
+        break;
+      case "notification.changed":
+        await notifications.load();
         break;
       case "approval.resolved":
         await Promise.allSettled([approvals.load(), contacts.load()]);
@@ -109,6 +114,9 @@ export function useRuntimeEvents() {
         break;
       case "apps.changed":
         await apps.load();
+        break;
+      case "flexi_link.changed":
+        apps.link = payload.payload as FlexiLinkStatus;
         break;
       case "browser.frame":
         browser.onFrame(payload.payload as BrowserFrame);

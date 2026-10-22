@@ -23,7 +23,7 @@ const toRemove = ref<AppConnection | null>(null);
 const teamFor = ref<AppConnection | null>(null);
 const selectionError = ref<string | null>(null);
 
-onMounted(() => apps.load());
+onMounted(() => { void apps.load(); void apps.loadLink(); });
 const statusLabel = computed(() => (c: AppConnection) => ({ connected: "Conectado", needs_login: "Precisa entrar de novo", mfa_pending: "Aguardando codigo 2FA", error: "Com problema" }[c.status]));
 const statusCls = computed(() => (c: AppConnection) => ({ connected: "bg-emerald-500/10 text-emerald-400", needs_login: "bg-amber-500/10 text-amber-300", mfa_pending: "bg-amber-500/15 text-amber-200", error: "bg-red-500/10 text-red-300" }[c.status]));
 const dotCls = computed(() => (c: AppConnection) => ({ connected: "bg-emerald-400", needs_login: "bg-amber-400", mfa_pending: "bg-amber-300", error: "bg-red-400" }[c.status]));
@@ -107,6 +107,11 @@ async function createTeam() {
     </ul>
 
     <div v-if="apps.flexi.length" class="border-t border-zinc-800 px-5 py-3 text-xs text-zinc-400">
+      <p v-if="accountId && apps.link" class="mb-1.5 flex items-center gap-1.5" :class="apps.link.connected ? 'text-emerald-400' : 'text-zinc-500'">
+        <span class="h-1.5 w-1.5 rounded-full" :class="apps.link.connected ? 'bg-emerald-400' : 'bg-zinc-600'"></span>
+        <span v-if="apps.link.connected">Conectado ao Flexi web</span>
+        <span v-else>Sem conexão com o Flexi web{{ apps.link.last_error ? `: ${apps.link.last_error}` : '' }}</span>
+      </p>
       <p v-if="agentConnection">Os agentes acessam o Flexi como <strong class="text-zinc-200">{{ displayName(agentConnection) }}</strong>. Sua conta continua sendo usada para entrar no DOTS.</p>
       <p v-else>Escolha acima uma conta para os agentes acessarem o Flexi. Sua conta de login não é usada automaticamente por eles.</p>
     </div>

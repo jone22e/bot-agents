@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppConnection, FlexiConnectInput, FlexiRoleTemplate } from "@dots/shared-types";
-import { api, RuntimeError, type FlexiBrowserLogin } from "@/api";
+import { api, RuntimeError, type FlexiBrowserLogin, type FlexiLinkStatus } from "@/api";
 import { useSettingsStore } from "@/stores/settings";
 
 /** Conexao Flexi da conta do proprio usuario (vinculada pelo "Logar com Flexi"); a foto dela vai na bolinha "EU". */
@@ -23,6 +23,8 @@ export const useAppsStore = defineStore("apps", {
     browserLogin: null as FlexiBrowserLogin | null,
     /** Foto de perfil (data URL) da conta do usuario. */
     photo: null as string | null,
+    /** Canal com o Flexi web; `null` enquanto nao foi consultado. */
+    link: null as FlexiLinkStatus | null,
   }),
   getters: {
     flexi: (s) => s.connections.filter((c) => c.kind === "flexi"),
@@ -99,6 +101,9 @@ export const useAppsStore = defineStore("apps", {
       catch (e) { this.error = `Nao foi possivel abrir o navegador: ${e instanceof Error ? e.message : String(e)}`; }
     },
     cancelBrowserLogin() { this.browserLogin = null; },
+    async loadLink() {
+      try { this.link = await api.apps.flexiLinkStatus(); } catch { /* runtime antigo sem o canal */ }
+    },
     async loadPhoto(id: string | null) {
       if (!id) { this.photo = null; return; }
       try { this.photo = (await api.apps.flexiPhoto(id)).data_url; } catch { this.photo = null; }
