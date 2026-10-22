@@ -419,7 +419,39 @@ fn said(reason: &Option<String>) -> String {
 
 fn truncate_json(v: &Value) -> Value {
     let s = v.to_string();
-    if s.len() > 2000 { Value::String(format!("{}…", &s[..2000])) } else { v.clone() }
+    if s.len() <= 2000 {
+        return v.clone();
+    }
+    // Recua ate o inicio de um caractere: cortar no meio de um acento (UTF-8 multibyte) causa panico.
+    let mut end = 2000;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    Value::String(format!("{}…", &s[..end]))
+}
+
+#[cfg(test)]
+mod truncate_json_tests {
+    use super::truncate_json;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn corta_sem_partir_caractere_acentuado() {
+        // Na string JSON (com as aspas) o "ç" ocupa os bytes 1999..2001, entao o byte 2000 cai no meio dele.
+        let texto = format!("{}ãção", "a".repeat(1996));
+        let v = json!(texto);
+        assert!(v.to_string().len() > 2000);
+        let out = truncate_json(&v);
+        let Value::String(s) = out else { panic!("esperava string") };
+        assert!(s.ends_with('…'));
+        assert!(s.trim_end_matches('…').len() <= 2000);
+    }
+
+    #[test]
+    fn mantem_valor_curto_intacto() {
+        let v = json!({ "op": "restore", "msg": "ação" });
+        assert_eq!(truncate_json(&v), v);
+    }
 }
 
 impl ToolOutput {
