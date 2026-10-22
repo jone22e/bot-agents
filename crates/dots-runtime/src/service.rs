@@ -44,6 +44,8 @@ pub struct RuntimeService {
     pub browsers: crate::browser::BrowserPool,
     pub usage: crate::usage::UsageCache,
     pub cli_updates: crate::cli_updates::UpdatesCache,
+    /// Canal WebSocket com o Flexi web (ADR 0015).
+    pub flexi_link: crate::flexi_link::LinkState,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +248,13 @@ struct EventsParamsLite {
     id: String,
     #[serde(default)]
     limit: u32,
+}
+
+/// `id` ausente = limpar todas as pendentes.
+#[derive(Deserialize, Default)]
+struct NotificationClearParams {
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -816,6 +825,18 @@ impl RuntimeService {
                 let ApprovalListParams { pending_only, limit } = p(params).unwrap_or_default();
                 Ok(json!(self.storage.call(move |s| s.approvals().list(pending_only, limit)).await?))
             }
+            "notifications.list" => {
+                let ApprovalListParams { pending_only, limit } = p(params).unwrap_or_default();
+                Ok(json!(self.storage.call(move |s| s.notifications().list(pending_only, limit)).await?))
+            }
+            "notifications.clear" => {
+                let NotificationClearParams { id } = p(params).unwrap_or_default();
+                let cleared = self.storage.call(move |s| s.notifications().clear(id.as_deref())).await?;
+                if cleared > 0 {
+                    self.events.emit("notification.changed", json!({ "cleared": cleared }));
+                }
+                Ok(json!({ "cleared": cleared }))
+            }
             "approvals.decide" => {
                 let DecideParams { id, approved, reason } = p(params)?;
                 Ok(json!(self.decide_approval(&id, approved, reason).await?))
@@ -967,6 +988,7 @@ impl RuntimeService {
                 self.flexi_profile_photo(&id).await
             }
             "apps.flexi.templates" => Ok(json!(self.flexi_templates(None).await)),
+            "apps.flexi.link_status" => Ok(json!(self.flexi_link.status())),
             "apps.flexi.create_team" => {
                 let IdParams { id } = p(params)?;
                 Ok(self.flexi_create_team(&id).await?)
