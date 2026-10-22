@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Activity, Blocks, Check, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
+import { Activity, BarChart3, Blocks, Check, ChevronDown, ClipboardCheck, LayoutGrid, Plus, Search, Settings, Users } from "lucide-vue-next";
 import Avatar from "@/components/Avatar.vue";
 import DotContextMenu from "@/components/DotContextMenu.vue";
 import Heartbeat from "@/components/Heartbeat.vue";
@@ -12,9 +12,11 @@ import { useColumnWidth } from "@/composables/useColumnWidth";
 import { useDotMenu } from "@/composables/useDotMenu";
 import { useDragReorder } from "@/composables/useDragReorder";
 import { ACCOUNT_CONNECTION, useAppsStore } from "@/stores/apps";
+import { useApprovalsStore } from "@/stores/approvals";
 import { useSettingsStore } from "@/stores/settings";
 import { useContactsStore } from "@/stores/contacts";
 import { useGroupStore } from "@/stores/group";
+import { useNotificationsStore } from "@/stores/notifications";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useTeamsStore } from "@/stores/teams";
 
@@ -24,7 +26,16 @@ const contacts = useContactsStore();
 const apps = useAppsStore();
 const teams = useTeamsStore();
 const group = useGroupStore();
+const notifications = useNotificationsStore();
+const approvals = useApprovalsStore();
 type Contact = (typeof contacts.items)[number];
+/** DOT com aviso pendente (dots_notify_user): linha e avatar destacados ate o usuario clicar nele. */
+const notified = (c: Contact) => notifications.countByDot.has(c.dot.id);
+/** Abrir a conversa de um DOT e o clique que limpa os avisos dele. */
+function openDot(c: Contact) {
+  if (notified(c)) void notifications.clear({ dotId: c.dot.id });
+  go(`/chat/${c.dot.id}`);
+}
 /**
  * Lista agrupada por equipe: o gerente primeiro, depois os funcionarios (compactos: o usuario fala com o gerente,
  * que responde as perguntas deles). Quem gerencia uma equipe aparece so nela.
@@ -58,6 +69,8 @@ const shortTitle = (t: string) => { const i = t.indexOf(":"); return i > 0 ? t.s
 const runtime = useRuntimeStore();
 const settings = useSettingsStore();
 const menu = ref(false);
+/** Dropdown ao lado de "Visao geral": Central de aprovacoes e Avaliacao de desempenho. */
+const hub = ref(false);
 /** Botao direito sobre um DOT: acoes rapidas (pausar, retomar, duplicar, arquivar). */
 const dotMenu = useDotMenu();
 /** Arrastar o titulo de uma equipe para cima ou para baixo reordena os grupos (a ordem vale tambem na visao geral). */
@@ -91,15 +104,40 @@ function when(iso: string) {
 }
 function go(path: string) {
   menu.value = false;
+  hub.value = false;
   router.push(path);
 }
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false">
+  <div class="flex h-full flex-col overflow-hidden bg-zinc-950" @click="menu = false; hub = false">
     <header class="relative flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800/80 pr-4 pl-24" style="background: var(--panel)" data-tauri-drag-region="deep">
       <span class="text-[11px] font-semibold tracking-[0.16em] text-zinc-400">DOTS</span>
-      <button class="absolute left-1/2 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full px-3 text-sm font-medium hover:bg-zinc-800 hover:text-zinc-100" :class="route.name === 'overview' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'" title="Visão geral dos agentes" @click="go('/overview')"><LayoutGrid :size="15" /> Visão geral</button>
+      <div class="absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5" data-tauri-drag-region="false">
+        <button class="flex h-8 items-center gap-2 rounded-full px-3 text-sm font-medium hover:bg-zinc-800 hover:text-zinc-100" :class="route.name === 'overview' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'" title="Visão geral dos agentes" @click="go('/overview')"><LayoutGrid :size="15" /> Visão geral</button>
+        <div class="relative">
+          <button class="flex h-8 items-center gap-1 rounded-full px-2 text-sm font-medium hover:bg-zinc-800 hover:text-zinc-100" :class="hub || route.name === 'approvals' || route.name === 'performance' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'" title="Central de aprovações e avaliação de desempenho" aria-haspopup="menu" :aria-expanded="hub" data-testid="hub-toggle" @click.stop="hub = !hub; menu = false">
+            <ChevronDown :size="15" class="transition-transform" :class="hub ? 'rotate-180' : ''" />
+            <span v-if="approvals.pending.length" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950" title="Decisões pendentes">{{ approvals.pending.length }}</span>
+          </button>
+          <div v-if="hub" role="menu" class="absolute left-1/2 top-[calc(100%+6px)] z-50 w-[360px] -translate-x-1/2 rounded-xl border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-2xl" @click.stop>
+            <button role="menuitem" class="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-zinc-800" data-testid="approvals-link" @click="go('/approvals')">
+              <ClipboardCheck :size="17" class="mt-0.5 shrink-0 text-zinc-400" />
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center gap-2 font-medium text-zinc-100">Central de aprovações<span v-if="approvals.pending.length" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ approvals.pending.length }}</span></span>
+                <span class="block text-xs leading-snug text-zinc-400">Uma fila única de decisões pendentes, com justificativa, impacto previsto, evidências e botões para aprovar, rejeitar ou solicitar revisão.</span>
+              </span>
+            </button>
+            <button role="menuitem" class="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-zinc-800" data-testid="performance-link" @click="go('/performance')">
+              <BarChart3 :size="17" class="mt-0.5 shrink-0 text-zinc-400" />
+              <span class="min-w-0 flex-1">
+                <span class="block font-medium text-zinc-100">Avaliação de desempenho</span>
+                <span class="block text-xs leading-snug text-zinc-400">Taxa de sucesso, reincidência, custo por operação, tempo de resolução, ações revertidas e tarefas que exigiram intervenção humana.</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
       <span class="flex-1" />
       <UsageChip opens="down" data-tauri-drag-region="false" />
       <div class="relative" data-tauri-drag-region="false">
@@ -144,8 +182,8 @@ function go(path: string) {
         <div v-for="s in sections" :key="s.key" class="team-section" :class="drag.classOf(s.key)" :data-drag-id="s.key !== 'none' ? s.key : undefined">
         <p v-if="s.title" class="mt-3 mb-1 flex items-baseline gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500" :class="s.key !== 'none' ? 'cursor-grab select-none' : ''" :title="s.key !== 'none' ? 'Arraste para reordenar as equipes' : undefined" @pointerdown="s.key !== 'none' && drag.start($event, s.key)"><span class="truncate">{{ s.title }}</span><span v-if="s.subtitle" class="truncate font-normal normal-case tracking-normal text-zinc-600">{{ s.subtitle }}</span></p>
         <template v-for="c in s.rows" :key="c.dot.id">
-        <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)" @contextmenu="dotMenu.open($event, c.dot)">
-          <span class="sidebar-avatar compact" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
+        <button v-if="compact(s, c)" class="mb-0.5 flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-7 pr-3 text-left hover:bg-zinc-800/70" :class="[currentDot === c.dot.id ? 'bg-zinc-800' : '', notified(c) ? 'notified' : '']" @click="openDot(c)" @contextmenu="dotMenu.open($event, c.dot)">
+          <span class="sidebar-avatar compact" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span><span v-if="notified(c)" class="notify-marker" title="Precisa de você" /></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-1.5">
               <span class="max-w-[60%] shrink-0 truncate text-[13px] text-zinc-200">{{ c.dot.name }}</span>
@@ -156,8 +194,8 @@ function go(path: string) {
           <Heartbeat v-if="toneOf(c.pulse) !== 'idle'" :tone="toneOf(c.pulse)" />
           <span v-if="c.pending_requests" class="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-zinc-950">{{ c.pending_requests }}</span>
         </button>
-        <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="currentDot === c.dot.id ? 'bg-zinc-800' : ''" @click="go(`/chat/${c.dot.id}`)" @contextmenu="dotMenu.open($event, c.dot)">
-          <span class="sidebar-avatar" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span></span>
+        <button v-else class="mb-0.5 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800/70" :class="[currentDot === c.dot.id ? 'bg-zinc-800' : '', notified(c) ? 'notified' : '']" @click="openDot(c)" @contextmenu="dotMenu.open($event, c.dot)">
+          <span class="sidebar-avatar" :class="statusOf(c)"><Avatar :name="c.dot.name" :seed="c.dot.id" /><span v-if="statusOf(c) === 'done'" class="status-marker"><Check :size="9" :stroke-width="3" /></span><span v-if="notified(c)" class="notify-marker" title="Precisa de você" /></span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline justify-between gap-2">
               <span class="truncate text-sm font-medium text-zinc-100">{{ c.dot.name }}</span>
@@ -194,6 +232,10 @@ function go(path: string) {
 .sidebar-avatar.done { border-color: #22c55e; }
 .sidebar-avatar.waiting { border-color: #f97316; }
 .sidebar-avatar.paused { border-color: #fbbf24; }
+/* DOT com aviso pendente: anel violeta na linha e ponto no canto do avatar (some quando o usuario clica nele). */
+.notified { box-shadow: inset 0 0 0 1px rgb(139 92 246 / 0.7); background: rgb(139 92 246 / 0.08); }
+.notify-marker { position: absolute; right: -3px; top: -3px; height: 12px; width: 12px; border: 2px solid #202027; border-radius: 9999px; background: #8b5cf6; }
+.sidebar-avatar.compact .notify-marker { height: 10px; width: 10px; right: -2px; top: -2px; }
 .status-marker { position: absolute; right: -4px; bottom: -4px; display: flex; height: 14px; width: 14px; align-items: center; justify-content: center; border: 2px solid #202027; border-radius: 9999px; background: #22c55e; color: white; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .team-section { border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
