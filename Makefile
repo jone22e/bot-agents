@@ -1,13 +1,14 @@
 # Publicação de versões do DOTS (ver RELEASE.md)
-.PHONY: help update update-minor update-major release build-mac
+.PHONY: help update update-minor update-major release build-mac build-linux
 
 help:
-	@echo "make update         sobe a versão (0.4.0 -> 0.4.1) e publica"
+	@echo "make update         sobe a versão (0.4.0 -> 0.4.1) e publica macOS + Linux"
 	@echo "make update-minor   sobe a versão (0.4.3 -> 0.5.0) e publica"
 	@echo "make update-major   sobe a versão (0.5.1 -> 1.0.0) e publica"
 	@echo "make update VERSION=1.4.0   publica com um número escolhido"
 	@echo "make release        publica a versão que já está nos arquivos"
 	@echo "make build-mac      gera o instalador local, sem assinar nem publicar"
+	@echo "make build-linux    gera o pacote .deb x86_64 local, sem publicar"
 
 update:
 	@scripts/release.sh $(or $(VERSION),patch)
@@ -23,3 +24,6 @@ release:
 
 build-mac:
 	@scripts/release.sh build
+
+build-linux:
+	@scripts/build-linux.sh

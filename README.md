@@ -1,6 +1,6 @@
 # DOTS
 
-Plataforma desktop (macOS primeiro) de agentes autonomos persistentes. Cada DOT e um
+Plataforma desktop (macOS e Linux x86_64) de agentes autonomos persistentes. Cada DOT e um
 trabalhador digital com identidade, objetivo, instrucoes, memoria e um motor de IA
 (Codex CLI, Claude Code ou AGY) usado como ferramenta de execucao.
 
@@ -9,6 +9,7 @@ se conectam ao Flexi com o usuario que voce escolher e trabalham com anuncios, p
 ferramentas `flexi_*` sob a mesma politica de permissoes. O Hub e a comunicacao entre computadores chegam na Fase 4.
 
 - Instalacao e uso: [docs/INSTALL.md](docs/INSTALL.md)
+- Instalacao no Ubuntu/Debian: [docs/INSTALL-LINUX.md](docs/INSTALL-LINUX.md)
 - Arquitetura: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Decisoes: [docs/adr/](docs/adr/)
 - Resumo tecnico da Fase 1: [docs/PHASE1.md](docs/PHASE1.md)
@@ -43,4 +44,10 @@ Build do instalador (`.app` e `.dmg` em `target/release/bundle/`):
 ```bash
 scripts/build-sidecar.sh release
 pnpm build
+```
+
+Pacote Ubuntu/Debian x86_64 (`.deb` em `tmp/linux/`):
+
+```bash
+make build-linux  # requer Docker; make update inclui o pacote no release
 ```

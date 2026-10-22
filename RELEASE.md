@@ -16,12 +16,13 @@ make update
 
 | Comando | O que faz |
 |---|---|
-| `make update` | Sobe a versão de correção (0.4.0 → 0.4.1) e publica |
+| `make update` | Sobe a versão de correção (0.4.0 → 0.4.1) e publica macOS e Linux x86_64 |
 | `make update-minor` | Sobe a versão de funcionalidade (0.4.3 → 0.5.0) e publica |
 | `make update-major` | Sobe a versão principal (0.5.1 → 1.0.0) e publica |
 | `make update VERSION=1.4.0` | Publica com o número informado |
 | `make release` | Publica a versão que já está nos arquivos, sem subir o número |
 | `make build-mac` | Gera o instalador local em `target/universal-apple-darwin/release/bundle/dmg/`, sem assinar e sem publicar |
+| `make build-linux` | Gera o `.deb` x86_64 em `tmp/linux/` com Docker, sem publicar |
 
 ## O que o `make update` faz
 
@@ -30,9 +31,10 @@ make update
 2. Sobe o número da versão em `Cargo.toml` (workspace), `apps/desktop/src-tauri/tauri.conf.json` e
    `apps/desktop/package.json`.
 3. Roda os testes (`cargo test --workspace` e os testes do frontend).
-4. Compila para arm64 e x86_64 num app só (universal), assina com o Developer ID e envia para a Apple notarizar.
-5. Gera o DMG (assinado e notarizado) e o pacote da atualização (`.app.tar.gz` assinado com a chave das
-   atualizações) e o `latest.json`, e sobe os três para um release em rascunho no GitHub.
+4. Compila o app universal do macOS e o pacote `.deb` para Linux x86_64 em um contêiner Debian.
+5. Assina o app macOS com o Developer ID e envia para a Apple notarizar. Gera o DMG e os pacotes de atualização
+   (`.app.tar.gz` e `.deb`, assinados com a chave das atualizações), inclui as três plataformas no `latest.json`
+   e sobe os quatro arquivos para um release em rascunho no GitHub.
 6. Faz o commit `chore: versão X`, cria a tag `vX` e envia para o servidor.
 7. Tira o release do rascunho. A partir daí os apps instalados enxergam a versão.
 
@@ -59,7 +61,10 @@ Faça o commit e o push do que vai entrar na versão. O comando se recusa a roda
 3. **GitHub.** `gh auth login` com uma conta que tenha permissão de escrita no repositório.
 
 4. **Ferramentas.** Rust com o alvo Intel (`rustup target add x86_64-apple-darwin`), as ferramentas de linha de
-   comando do Xcode (`xcode-select --install`, para o ajudante de ditado em Swift) e Node (nvm).
+   comando do Xcode (`xcode-select --install`, para o ajudante de ditado em Swift), Node (nvm) e Docker em execução.
+
+O pacote Linux usa o Secret Service do ambiente gráfico para guardar credenciais. O ditado por voz continua
+exclusivo do macOS.
 
 ## Conferir se a atualização chegou
 
@@ -94,5 +99,6 @@ gh release edit v0.4.1 -R jone22e/bot-agents --notes "Texto novo"
 | `apps/desktop/src/stores/updater.ts` | Estado na tela (barra e Configurações) |
 | `scripts/release.sh` | Passos do `make update` |
 | `scripts/build-sidecar.sh` | Serviço e ajudante de ditado (`universal` para o instalador) |
+| `scripts/build-linux.sh` e `scripts/Dockerfile.linux` | Build isolado do pacote `.deb` x86_64 |
 | `apps/desktop/src-tauri/tauri.conf.json` → `plugins.updater` | Chave pública e endereço do `latest.json` |
 | `apps/desktop/src-tauri/Entitlements.plist` | Permissões do app assinado (microfone do ditado) |

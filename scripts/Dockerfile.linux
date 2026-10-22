@@ -1,0 +1,20 @@
+FROM node:24-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl file libayatana-appindicator3-dev libdbus-1-dev \
+    librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev patchelf pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN npm install -g pnpm@12.4.2
+
+WORKDIR /workspace
+COPY . .
+RUN pnpm install --frozen-lockfile
+RUN scripts/build-sidecar.sh release
+RUN cd apps/desktop && ./node_modules/.bin/tauri build --bundles deb \
+    --config '{"build":{"beforeBuildCommand":"pnpm exec vite build"}}'
+
+RUN mkdir /artifacts && cp target/release/bundle/deb/*.deb /artifacts/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gera e publica uma versão do DOTS para macOS (ver RELEASE.md). Mesmo fluxo do ovrgit (scripts/release.sh).
+# Gera e publica uma versão do DOTS para macOS e Linux (ver RELEASE.md).
 #   scripts/release.sh patch|minor|major|x.y.z   sobe a versão e publica
 #   scripts/release.sh current                   publica a versão que já está nos arquivos
 #   scripts/release.sh build                     só gera o instalador local (sem assinar, sem publicar)
@@ -76,6 +76,8 @@ step "Conferindo o ambiente"
 command -v gh >/dev/null || fail "GitHub CLI não encontrado (brew install gh)."
 gh auth status >/dev/null 2>&1 || fail "GitHub CLI sem login (gh auth login)."
 command -v node >/dev/null || fail "Node não encontrado (nvm)."
+command -v docker >/dev/null || fail "Docker não encontrado (necessário para o pacote Linux)."
+docker info >/dev/null 2>&1 || fail "Docker não está em execução (necessário para o pacote Linux)."
 rustup target list --installed | grep -q x86_64-apple-darwin || fail "Falta o alvo Intel do Rust (rustup target add x86_64-apple-darwin)."
 security find-identity -v -p codesigning | grep -qF "$IDENTITY" || fail "Certificado \"$IDENTITY\" não encontrado no keychain."
 NOTARY_CHECK="$(xcrun notarytool history --keychain-profile "$PROFILE" 2>&1 >/dev/null)" \
@@ -124,6 +126,11 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 DMG="DOTS_${VERSION}_universal.dmg"
 TGZ="DOTS_${VERSION}_universal.app.tar.gz"
 
+step "Gerando o instalador Linux (DEB x86_64)"
+scripts/build-linux.sh "$OUT"
+LINUX_DEB="$OUT/DOTS_${VERSION}_amd64.deb"
+[ -f "$LINUX_DEB" ] || fail "Pacote Linux não encontrado em $LINUX_DEB."
+
 step "Notarizando o app (leva alguns minutos)"
 ditto -c -k --keepParent "$APP" "$OUT/DOTS.zip"
 notarize "$OUT/DOTS.zip"
@@ -143,23 +150,25 @@ xcrun stapler staple -q "$OUT/$DMG"
 step "Pacote da atualização automática"
 COPYFILE_DISABLE=1 tar -czf "$OUT/$TGZ" -C "$(dirname "$APP")" DOTS.app
 (cd apps/desktop && ./node_modules/.bin/tauri signer sign -f "$UPDATER_KEY" -p "" --app-version "$VERSION" "$OUT/$TGZ" >/dev/null)
-python3 - "$VERSION" "$OUT/$TGZ.sig" "https://github.com/$REPO/releases/download/$TAG/$TGZ" "$NOTES" "$OUT/latest.json" <<'EOF'
+(cd apps/desktop && ./node_modules/.bin/tauri signer sign -f "$UPDATER_KEY" -p "" --app-version "$VERSION" "$LINUX_DEB" >/dev/null)
+python3 - "$VERSION" "$OUT/$TGZ.sig" "https://github.com/$REPO/releases/download/$TAG/$TGZ" "$LINUX_DEB.sig" "https://github.com/$REPO/releases/download/$TAG/$(basename "$LINUX_DEB")" "$NOTES" "$OUT/latest.json" <<'EOF'
 import datetime, json, sys
-version, sig, url, notes, dest = sys.argv[1:]
-entry = {"signature": open(sig).read().strip(), "url": url}
+version, mac_sig, mac_url, linux_sig, linux_url, notes, dest = sys.argv[1:]
+mac_entry = {"signature": open(mac_sig).read().strip(), "url": mac_url}
+linux_entry = {"signature": open(linux_sig).read().strip(), "url": linux_url}
 json.dump({
     "version": version,
     "notes": open(notes).read().strip(),
     "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     # o mesmo pacote universal serve aos dois tipos de Mac
-    "platforms": {"darwin-aarch64": entry, "darwin-x86_64": entry},
+    "platforms": {"darwin-aarch64": mac_entry, "darwin-x86_64": mac_entry, "linux-x86_64": linux_entry},
 }, open(dest, "w"), indent=2, ensure_ascii=False)
 EOF
 
 step "Enviando para o GitHub (rascunho)"
 gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
   || gh release create "$TAG" -R "$REPO" --draft --title "$VERSION" --notes-file "$NOTES" >/dev/null
-gh release upload "$TAG" -R "$REPO" --clobber "$OUT/$DMG" "$OUT/$TGZ" "$OUT/latest.json"
+gh release upload "$TAG" -R "$REPO" --clobber "$OUT/$DMG" "$OUT/$TGZ" "$LINUX_DEB" "$OUT/latest.json"
 
 step "Gravando a versão no Git"
 if [ "$BUMP" != "current" ]; then
@@ -175,3 +184,4 @@ gh release edit "$TAG" -R "$REPO" --draft=false --latest --notes-file "$NOTES" >
 echo
 echo "✓ DOTS $VERSION publicado: https://github.com/$REPO/releases/tag/$TAG"
 echo "  Instalador: $OUT/$DMG"
+echo "  Linux: $LINUX_DEB"

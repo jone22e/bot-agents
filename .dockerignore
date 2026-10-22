@@ -1,0 +1,12 @@
+.git
+.ovseer
+.env*
+**/.env*
+target
+dist
+tmp
+node_modules
+**/node_modules
+apps/desktop/src-tauri/binaries
+native/macos/Transcribe/.build
+*.log
