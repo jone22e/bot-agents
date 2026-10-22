@@ -154,6 +154,9 @@ pub struct Approval {
     /// Recursos afetados (caminhos, comando, repositorio).
     pub resources: Vec<String>,
     pub summary: String,
+    /// Avaliacao declarada pelo agente antes da acao; ausente em pedidos antigos ou sem avaliacao.
+    pub confidence_percent: Option<u8>,
+    pub reversible: Option<bool>,
     pub status: ApprovalStatus,
     pub requested_at: Timestamp,
     pub expires_at: Timestamp,

@@ -75,6 +75,43 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+/// Campos opcionais para o agente avaliar o pedido, sem alterar o contrato da acao executada.
+pub fn add_approval_assessment_schema(definitions: &mut [Value]) {
+    for definition in definitions {
+        if definition.get("name").and_then(Value::as_str) == Some("permission_prompt") {
+            continue;
+        }
+        definition["inputSchema"]["properties"]["_dots_approval_assessment"] = json!({
+            "type": "object",
+            "description": "Avaliacao do agente para eventual pedido de aprovacao; omita se nao souber avaliar honestamente.",
+            "properties": {
+                "confidence_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Chance estimada de a acao produzir o resultado esperado; nao e chance de aprovacao." },
+                "reversible": { "type": "boolean", "description": "Verdadeiro somente se voce conhece como desfazer os efeitos desta acao." }
+            },
+            "required": ["confidence_percent", "reversible"]
+        });
+    }
+}
+
+#[cfg(test)]
+mod assessment_schema_tests {
+    use super::{add_approval_assessment_schema, tool_definitions};
+    use serde_json::json;
+
+    #[test]
+    fn esquema_expoe_avaliacao_em_ferramentas_mcp_e_flexi() {
+        let mut tools = tool_definitions();
+        tools.push(json!({ "name": "flexi_atualizar_preco", "inputSchema": { "type": "object", "properties": { "id": { "type": "integer" } } } }));
+        add_approval_assessment_schema(&mut tools);
+        for name in ["dots_write_file", "flexi_atualizar_preco"] {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["inputSchema"]["properties"]["_dots_approval_assessment"]["required"], json!(["confidence_percent", "reversible"]));
+        }
+        let internal = tools.iter().find(|tool| tool["name"] == "permission_prompt").unwrap();
+        assert!(internal["inputSchema"]["properties"].get("_dots_approval_assessment").is_none());
+    }
+}
+
 pub fn list_dir(path: &Path, depth: usize) -> DotsResult<ToolOutput> {
     fn walk(p: &Path, depth: usize, prefix: &str, out: &mut Vec<String>, count: &mut usize) {
         let Ok(rd) = std::fs::read_dir(p) else { return };

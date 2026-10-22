@@ -14,4 +14,8 @@ options: Array<string>, execution_id: string, task_id: string, conversation_id: 
 /**
  * Recursos afetados (caminhos, comando, repositorio).
  */
-resources: Array<string>, summary: string, status: ApprovalStatus, requested_at: string, expires_at: string, resolved_at: string | null, reason: string | null, };
+resources: Array<string>, summary: string, 
+/**
+ * Avaliacao declarada pelo agente antes da acao; ausente em pedidos antigos ou sem avaliacao.
+ */
+confidence_percent: number | null, reversible: boolean | null, status: ApprovalStatus, requested_at: string, expires_at: string, resolved_at: string | null, reason: string | null, };

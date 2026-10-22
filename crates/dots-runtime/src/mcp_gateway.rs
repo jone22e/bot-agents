@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-use crate::tools::tool_definitions;
+use crate::tools::{add_approval_assessment_schema, tool_definitions};
 
 fn resolve_token() -> Option<String> {
     if let Ok(t) = std::env::var("DOTS_EXECUTION_TOKEN") {
@@ -82,7 +82,11 @@ impl Gateway {
                 };
                 match dynamic {
                     Some(v) => self.reply(id, v).await,
-                    None => self.reply(id, json!({ "tools": tool_definitions() })).await,
+                    None => {
+                        let mut tools = tool_definitions();
+                        add_approval_assessment_schema(&mut tools);
+                        self.reply(id, json!({ "tools": tools })).await;
+                    }
                 }
             }
             "tools/call" => {

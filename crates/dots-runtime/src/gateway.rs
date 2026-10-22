@@ -24,9 +24,22 @@ fn browser_ref(args: &Value) -> Option<u64> {
     v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches("ref=").trim_start_matches('[').trim_end_matches(']').parse().ok()))
 }
 
+/// Metadados declarados pelo agente nao fazem parte dos parametros da ferramenta executada.
+fn take_approval_assessment(args: &mut Value) -> DotsResult<Option<(u8, bool)>> {
+    let Some(raw) = args.as_object_mut().and_then(|obj| obj.remove("_dots_approval_assessment")) else {
+        return Ok(None);
+    };
+    let confidence = raw.get("confidence_percent").and_then(Value::as_u64)
+        .filter(|value| *value <= 100)
+        .ok_or_else(|| DotsError::Validation("confidence_percent deve ser um inteiro de 0 a 100".into()))?;
+    let reversible = raw.get("reversible").and_then(Value::as_bool)
+        .ok_or_else(|| DotsError::Validation("reversible deve ser booleano".into()))?;
+    Ok(Some((confidence as u8, reversible)))
+}
+
 impl RuntimeService {
     /// Entrada unica das chamadas vindas do `dotsd mcp-gateway`.
-    pub async fn gateway_call(&self, token: &str, tool: &str, args: Value) -> DotsResult<ToolOutput> {
+    pub async fn gateway_call(&self, token: &str, tool: &str, mut args: Value) -> DotsResult<ToolOutput> {
         let ctx = self
             .registry
             .context_by_token(token)
@@ -34,6 +47,7 @@ impl RuntimeService {
         if tool == "permission_prompt" {
             return self.permission_prompt(ctx, &args).await;
         }
+        let assessment = take_approval_assessment(&mut args)?;
         let args = if BROWSER_ACTIONS.contains(&tool) { self.browser_context(&ctx.dot_id, args).await } else { args };
         // Demissao: quem nao gerencia a equipe do alvo nem chega a pedir aprovacao ao usuario.
         if tool == "dots_dismiss_employee" {
@@ -67,7 +81,7 @@ impl RuntimeService {
                     return Ok(ToolOutput::err(format!("NEGADO: {msg}")));
                 }
                 let summary = format!("acessar {host} no navegador deste DOT");
-                let (approved, reason) = self.request_approval(&ctx, tool, &args, RiskLevel::Exec, &[host.clone()], &summary).await?;
+                let (approved, reason) = self.request_approval(&ctx, tool, &args, RiskLevel::Exec, &[host.clone()], &summary, assessment).await?;
                 if !approved {
                     self.audit_tool(&ctx, tool, &args, "rejected", &summary).await;
                     return Ok(ToolOutput::err(format!("NEGADO: o usuario nao aprovou acesso a {host}.{} Nao tente contornar; prossiga sem ele ou explique o bloqueio.", said(&reason))));
@@ -95,7 +109,7 @@ impl RuntimeService {
                 (risk, resources, summary)
             }
             Decision::NeedsApproval { risk, resources, summary } => {
-                let (approved, reason) = self.request_approval(&ctx, tool, &args, risk, &resources, &summary).await?;
+                let (approved, reason) = self.request_approval(&ctx, tool, &args, risk, &resources, &summary, assessment).await?;
                 if !approved {
                     self.audit_tool(&ctx, tool, &args, "rejected", &summary).await;
                     return Ok(ToolOutput::err(format!("NEGADO: o usuario nao aprovou esta acao.{} Nao tente contornar; prossiga sem ela ou explique o bloqueio.", said(&reason))));
@@ -165,7 +179,7 @@ impl RuntimeService {
                 return Ok(ToolOutput::ok(json!({ "behavior": "deny", "message": format!("Negado pela politica do DOTS: {reason}") }).to_string()));
             }
             Decision::NeedsApproval { .. } if self.already_learned(&ctx, &tool_name, &input).await => (true, None),
-            Decision::NeedsApproval { risk, resources, summary } => self.request_approval(&ctx, &tool_name, &input, risk, &resources, &summary).await?,
+            Decision::NeedsApproval { risk, resources, summary } => self.request_approval(&ctx, &tool_name, &input, risk, &resources, &summary, None).await?,
         };
         if allow.0 {
             Ok(ToolOutput::ok(json!({ "behavior": "allow", "updatedInput": input }).to_string()))
@@ -204,12 +218,12 @@ impl RuntimeService {
 
     /// Cria a aprovacao, coloca a tarefa em WAITING_APPROVAL e aguarda a decisao (ou expira). Devolve se foi aprovada
     /// e, se negada, o que quem decidiu disse para fazer diferente.
-    async fn request_approval(&self, ctx: &SharedContext, tool: &str, input: &Value, risk: RiskLevel, resources: &[String], summary: &str) -> DotsResult<(bool, Option<String>)> {
+    async fn request_approval(&self, ctx: &SharedContext, tool: &str, input: &Value, risk: RiskLevel, resources: &[String], summary: &str, assessment: Option<(u8, bool)>) -> DotsResult<(bool, Option<String>)> {
         let ttl = self.approval_ttl().await;
         let (eid, tid, did, t, i, r, res, s) = (ctx.execution_id.clone(), ctx.task_id.clone(), ctx.dot_id.clone(), tool.to_string(), input.clone(), risk, resources.to_vec(), summary.to_string());
         let approval = self
             .storage
-            .call(move |st| st.approvals().create(&eid, &tid, &did, &t, &i, r, &res, &s, ttl))
+            .call(move |st| st.approvals().create_with_assessment(&eid, &tid, &did, &t, &i, r, &res, &s, ttl, assessment))
             .await?;
         let rx = self.registry.wait_approval(&approval.id);
         let tid = ctx.task_id.clone();
@@ -432,7 +446,7 @@ fn truncate_json(v: &Value) -> Value {
 
 #[cfg(test)]
 mod truncate_json_tests {
-    use super::truncate_json;
+    use super::{take_approval_assessment, truncate_json};
     use serde_json::{Value, json};
 
     #[test]
@@ -451,6 +465,19 @@ mod truncate_json_tests {
     fn mantem_valor_curto_intacto() {
         let v = json!({ "op": "restore", "msg": "ação" });
         assert_eq!(truncate_json(&v), v);
+    }
+
+    #[test]
+    fn avaliacao_do_agente_e_validada_e_removida_dos_parametros() {
+        let mut args = json!({ "id": 42, "_dots_approval_assessment": { "confidence_percent": 91, "reversible": false } });
+        assert_eq!(take_approval_assessment(&mut args).unwrap(), Some((91, false)));
+        assert_eq!(args, json!({ "id": 42 }));
+        assert_eq!(take_approval_assessment(&mut args).unwrap(), None);
+
+        let mut invalid = json!({ "_dots_approval_assessment": { "confidence_percent": 101, "reversible": true } });
+        assert!(take_approval_assessment(&mut invalid).is_err());
+        let mut invalid = json!({ "_dots_approval_assessment": { "confidence_percent": 80, "reversible": "sim" } });
+        assert!(take_approval_assessment(&mut invalid).is_err());
     }
 }
 

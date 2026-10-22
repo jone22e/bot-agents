@@ -8,16 +8,16 @@ pub struct ApprovalsRepo<'a> {
     conn: &'a mut Connection,
 }
 
-const COLS: &str = "a.id, a.execution_id, a.task_id, a.dot_id, COALESCE(d.name, '(removido)'), a.tool, a.input_json, a.risk, a.resources_json, a.summary, a.status, a.requested_at, a.expires_at, a.resolved_at, a.reason, a.kind, a.options_json, t.conversation_id";
+const COLS: &str = "a.id, a.execution_id, a.task_id, a.dot_id, COALESCE(d.name, '(removido)'), a.tool, a.input_json, a.risk, a.resources_json, a.summary, a.status, a.requested_at, a.expires_at, a.resolved_at, a.reason, a.kind, a.options_json, t.conversation_id, a.confidence_percent, a.reversible";
 
-type Raw = (String, String, String, String, String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, String, String, Option<String>);
+type Raw = (String, String, String, String, String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, String, String, Option<String>, Option<u8>, Option<bool>);
 
 fn map(r: &Row<'_>) -> rusqlite::Result<Raw> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?, r.get(16)?, r.get(17)?))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?, r.get(16)?, r.get(17)?, r.get(18)?, r.get(19)?))
 }
 
 fn to_approval(r: Raw) -> DotsResult<Approval> {
-    let (id, execution_id, task_id, dot_id, dot_name, tool, input, risk, resources, summary, status, requested_at, expires_at, resolved_at, reason, kind, options, conversation_id) = r;
+    let (id, execution_id, task_id, dot_id, dot_name, tool, input, risk, resources, summary, status, requested_at, expires_at, resolved_at, reason, kind, options, conversation_id, confidence_percent, reversible) = r;
     Ok(Approval {
         id, execution_id, task_id, conversation_id, dot_id, dot_name, tool,
         kind: ApprovalKind::parse(&kind),
@@ -25,7 +25,7 @@ fn to_approval(r: Raw) -> DotsResult<Approval> {
         input: serde_json::from_str(&input)?,
         risk: RiskLevel::parse(&risk),
         resources: serde_json::from_str(&resources).unwrap_or_default(),
-        summary,
+        summary, confidence_percent, reversible,
         status: ApprovalStatus::parse(&status),
         requested_at: parse_ts(&requested_at)?,
         expires_at: parse_ts(&expires_at)?,
@@ -83,14 +83,19 @@ impl<'a> ApprovalsRepo<'a> {
     }
 
     pub fn create(&mut self, execution_id: &str, task_id: &str, dot_id: &str, tool: &str, input: &serde_json::Value, risk: RiskLevel, resources: &[String], summary: &str, ttl_seconds: i64) -> DotsResult<Approval> {
+        self.create_with_assessment(execution_id, task_id, dot_id, tool, input, risk, resources, summary, ttl_seconds, None)
+    }
+
+    pub fn create_with_assessment(&mut self, execution_id: &str, task_id: &str, dot_id: &str, tool: &str, input: &serde_json::Value, risk: RiskLevel, resources: &[String], summary: &str, ttl_seconds: i64, assessment: Option<(u8, bool)>) -> DotsResult<Approval> {
         let id = new_id();
         let now = dots_core::now();
         let expires = now + chrono::Duration::seconds(ttl_seconds);
+        let (confidence_percent, reversible) = assessment.map_or((None, None), |(confidence, reversible)| (Some(confidence), Some(reversible)));
         self.conn
             .execute(
-                "INSERT INTO approvals (id, execution_id, task_id, dot_id, tool, input_json, risk, resources_json, summary, status, requested_at, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11)",
-                params![id, execution_id, task_id, dot_id, tool, serde_json::to_string(input)?, risk.as_str(), serde_json::to_string(resources)?, summary, ts(&now), ts(&expires)],
+                "INSERT INTO approvals (id, execution_id, task_id, dot_id, tool, input_json, risk, resources_json, summary, status, requested_at, expires_at, confidence_percent, reversible)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13)",
+                params![id, execution_id, task_id, dot_id, tool, serde_json::to_string(input)?, risk.as_str(), serde_json::to_string(resources)?, summary, ts(&now), ts(&expires), confidence_percent, reversible],
             )
             .map_err(storage_err)?;
         self.get(&id)
