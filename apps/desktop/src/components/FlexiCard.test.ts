@@ -50,4 +50,30 @@ describe("contas do Flexi", () => {
     expect(invoke.mock.calls.find(([, args]) => args.method === "settings.set")?.[1].params).toEqual({ key: AGENTS_CONNECTION, value: "agente" });
     expect(apps.flexi).toHaveLength(2);
   });
+
+  it("reabre o canal com o Flexi web pelo botao Reconectar canal", async () => {
+    const settings = useSettingsStore();
+    settings.loaded = true;
+    settings.items[ACCOUNT_CONNECTION] = "pessoal";
+    const link = { connected: true, since: "2026-10-22T14:46:21Z", last_error: null, base_url: "https://flexi.teste.com" };
+    invoke.mockImplementation(async (_command: string, args: { method: string }) => {
+      if (args.method === "apps.list") return [connection("pessoal", "Jone")];
+      if (args.method === "apps.flexi.link_status") return link;
+      if (args.method === "apps.flexi.link_reconnect") return link;
+      throw new Error(`chamada inesperada: ${args.method}`);
+    });
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/", component: { template: "<div />" } }] });
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(FlexiCard, { global: { plugins: [router], stubs: { FlexiBrowserLogin: true, ConfirmDialog: true, Toggle: true, ErrorBanner: true } } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Conectado ao Flexi web");
+    const button = wrapper.findAll("button").find((b) => b.text().includes("Reconectar canal"));
+    expect(button).toBeDefined();
+    await button!.trigger("click");
+    await flushPromises();
+    expect(invoke.mock.calls.some(([, args]) => (args as { method: string }).method === "apps.flexi.link_reconnect")).toBe(true);
+    expect(useAppsStore().error).toBeNull();
+  });
 });

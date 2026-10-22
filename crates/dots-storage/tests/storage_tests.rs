@@ -20,6 +20,31 @@ fn migrations_apply_once_and_are_idempotent() {
 }
 
 #[test]
+fn approval_assessment_upgrade_preserves_existing_approvals() {
+    use dots_storage::MIGRATIONS;
+    use rusqlite::params;
+
+    let (_dir, opts) = temp_db();
+    {
+        let mut s = Storage::open_with(opts.clone(), &MIGRATIONS[..12]).unwrap();
+        let dot_id = s.dots().create("user", DotCreate { name: "Existente".into(), ..Default::default() }, None).unwrap().id;
+        let task = s.tasks().create(dots_core::TaskCreate { dot_id: dot_id.clone(), prompt: "x".into(), ..Default::default() }, None).unwrap();
+        let execution = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
+        let now = dots_core::now().to_rfc3339();
+        s.conn().execute(
+            "INSERT INTO approvals (id, execution_id, task_id, dot_id, tool, input_json, risk, resources_json, summary, status, requested_at, expires_at, kind, options_json)
+             VALUES ('older', ?1, ?2, ?3, 'dots_write_file', '{}', 'write', '[]', 'pedido antigo', 'pending', ?4, ?4, 'permission', '[]')",
+            params![execution.id, task.id, dot_id, now],
+        ).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 12);
+    }
+    let mut s = Storage::open(opts).unwrap();
+    assert_eq!(s.schema_version().unwrap(), latest_version());
+    let older = s.approvals().get("older").unwrap();
+    assert_eq!((older.confidence_percent, older.reversible), (None, None));
+}
+
+#[test]
 fn dot_crud_roundtrip() {
     let mut s = Storage::open_in_memory().unwrap();
     let created = s
@@ -412,8 +437,13 @@ mod phase2 {
         let e = s.executions().create(&t.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
         let a = s.approvals().create(&e.id, &t.id, &dot_id, "dots_write_file", &serde_json::json!({"path": "/tmp/ws/a.txt"}), RiskLevel::Write, &["/tmp/ws/a.txt".into()], "escrever a.txt", 600).unwrap();
         assert_eq!(a.status, ApprovalStatus::Pending);
+        assert_eq!((a.confidence_percent, a.reversible), (None, None));
         assert_eq!(a.dot_name, "Exec");
         assert_eq!(s.approvals().pending_count().unwrap(), 1);
+        let assessed = s.approvals().create_with_assessment(&e.id, &t.id, &dot_id, "dots_write_file", &serde_json::json!({"path": "/tmp/ws/b.txt"}), RiskLevel::Write, &[], "escrever b.txt", 600, Some((91, false))).unwrap();
+        assert_eq!((assessed.confidence_percent, assessed.reversible), (Some(91), Some(false)));
+        let loaded = s.approvals().get(&assessed.id).unwrap();
+        assert_eq!((loaded.confidence_percent, loaded.reversible), (Some(91), Some(false)));
         let a = s.approvals().resolve(&a.id, true, None).unwrap();
         assert_eq!(a.status, ApprovalStatus::Approved);
         assert_eq!(s.approvals().resolve(&a.id, false, None).unwrap_err().code(), "CONFLICT");

@@ -309,3 +309,16 @@ async fn browser_login_creates_connection_and_reuses_it_on_relogin() {
     assert_eq!(rt.call("apps.flexi.browser_poll", json!({ "token": "tok-1" })).await["status"], "denied");
     rt.stop();
 }
+
+#[tokio::test]
+async fn link_reconnect_is_accepted_without_an_account() {
+    // Sem conta ligada nao ha canal; o pedido de reconexao e aceito, fica na auditoria e devolve o estado atual.
+    let rt = start().await;
+    let before = rt.call("apps.flexi.link_status", json!({})).await;
+    assert_eq!(before["connected"], json!(false));
+    let after = rt.call("apps.flexi.link_reconnect", json!({})).await;
+    assert_eq!(after["connected"], json!(false));
+    let audit = rt.call("audit.list", json!({ "limit": 50 })).await;
+    assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "apps.flexi.link_reconnect"), "{audit}");
+    rt.stop();
+}
