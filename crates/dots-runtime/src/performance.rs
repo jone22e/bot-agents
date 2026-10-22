@@ -288,6 +288,8 @@ mod tests {
             risk: RiskLevel::Write,
             resources: vec![],
             summary: String::new(),
+            confidence_percent: None,
+            reversible: None,
             status: ApprovalStatus::Pending,
             requested_at: ts(requested_h),
             expires_at: ts(requested_h + 1),
