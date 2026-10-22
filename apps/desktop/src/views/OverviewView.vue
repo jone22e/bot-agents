@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Check, ChevronDown } from "lucide-vue-next";
+import { Check } from "lucide-vue-next";
 import type { Contact } from "@dots/shared-types";
 import { api } from "@/api";
 import Avatar from "@/components/Avatar.vue";
@@ -25,10 +25,6 @@ const activity = ref<{ dot_id: string; started_at: string; finished_at: string }
 const now = ref(Date.now());
 const loadedTimes = ref(false);
 const timeError = ref(false);
-const actionCounts = ref<Record<string, number>>({});
-const loadedActions = ref(false);
-const actionsError = ref(false);
-const reportExpanded = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 function dayBounds(date: Date) {
@@ -38,26 +34,16 @@ function dayBounds(date: Date) {
   return { start: new Date(y, m, d), end: new Date(y, m, d + 1) };
 }
 
+/** Tempo ativo observado hoje por DOT (mostrado ao lado de cada nome). */
 async function loadReport() {
   now.value = Date.now();
   const { start, end } = dayBounds(new Date(now.value));
-  const [times, actions] = await Promise.allSettled([
-    api.executions.observedActivityInPeriod(start.toISOString(), end.toISOString()),
-    api.executions.toolCallsInPeriod(start.toISOString(), end.toISOString()),
-  ]);
-  if (times.status === "fulfilled") {
-    activity.value = times.value;
+  try {
+    activity.value = await api.executions.observedActivityInPeriod(start.toISOString(), end.toISOString());
     loadedTimes.value = true;
     timeError.value = false;
-  } else {
+  } catch {
     timeError.value = true;
-  }
-  if (actions.status === "fulfilled") {
-    actionCounts.value = actions.value;
-    loadedActions.value = true;
-    actionsError.value = false;
-  } else {
-    actionsError.value = true;
   }
 }
 
@@ -103,12 +89,6 @@ function formatDuration(milliseconds: number) {
 function workedToday(dotId: string) {
   return loadedTimes.value && !timeError.value ? formatDuration(timeByDot.value.get(dotId) ?? 0) : "—";
 }
-function actionsToday(dotId: string) {
-  return loadedActions.value && !actionsError.value ? actionCounts.value[dotId] ?? 0 : "—";
-}
-function formatActions(value: number | string) {
-  return typeof value === "number" ? value.toLocaleString("pt-BR") : value;
-}
 
 type Status = "working" | "done" | "waiting" | "paused" | "idle";
 const LEGEND: { key: Status; label: string }[] = [
@@ -139,30 +119,6 @@ const columns = computed(() => {
   if (rest.length) out.push({ key: "none", title: "Sem equipe", manager: null, members: rest });
   return out;
 });
-function agentsOf(col: OverviewColumn) {
-  return col.manager ? [col.manager, ...col.members] : col.members;
-}
-function groupWorkedToday(col: OverviewColumn) {
-  return loadedTimes.value && !timeError.value
-    ? formatDuration(elapsedWithoutOverlap(agentsOf(col).flatMap((c) => intervalsByDot.value.get(c.dot.id) ?? [])))
-    : "—";
-}
-function groupActionsToday(col: OverviewColumn) {
-  return loadedActions.value && !actionsError.value
-    ? agentsOf(col).reduce((sum, c) => sum + (actionCounts.value[c.dot.id] ?? 0), 0)
-    : "—";
-}
-const reportAgents = computed(() => {
-  const unique = new Map<string, Contact>();
-  for (const col of columns.value) for (const agent of agentsOf(col)) unique.set(agent.dot.id, agent);
-  return [...unique.values()];
-});
-const totalActionsToday = computed(() => loadedActions.value && !actionsError.value
-  ? reportAgents.value.reduce((sum, agent) => sum + (actionCounts.value[agent.dot.id] ?? 0), 0)
-  : "—");
-const totalWorkedToday = computed(() => loadedTimes.value && !timeError.value
-  ? formatDuration(elapsedWithoutOverlap(reportAgents.value.flatMap((agent) => intervalsByDot.value.get(agent.dot.id) ?? [])))
-  : "—");
 const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
 </script>
 
@@ -201,41 +157,6 @@ const open = (c: Contact) => router.push(`/chat/${c.dot.id}`);
           </div>
         </section>
       </div>
-      <section v-if="columns.length" class="mt-5 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
-        <div class="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
-          <div class="min-w-0">
-            <p class="text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-400">Atividade · hoje</p>
-            <h2 class="mt-1 text-base font-semibold text-zinc-100">Relatório de hoje</h2>
-          </div>
-          <div class="flex flex-wrap items-center gap-3 sm:gap-5">
-            <div class="text-right"><span class="block text-[10px] uppercase tracking-wider text-zinc-500">Ações</span><strong class="text-sm font-semibold tabular-nums text-zinc-100">{{ formatActions(totalActionsToday) }}</strong></div>
-            <div class="text-right"><span class="block text-[10px] uppercase tracking-wider text-zinc-500">Tempo observado</span><strong class="text-sm font-semibold tabular-nums text-zinc-100">{{ totalWorkedToday }}</strong></div>
-            <button type="button" class="flex h-9 items-center gap-1.5 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400" :aria-expanded="reportExpanded" aria-controls="today-report-details" @click="reportExpanded = !reportExpanded">
-              <span>{{ reportExpanded ? "Recolher" : "Expandir" }}</span><ChevronDown :size="15" class="transition-transform" :class="reportExpanded ? 'rotate-180' : ''" />
-            </button>
-          </div>
-        </div>
-        <div v-if="reportExpanded" id="today-report-details" class="border-t border-zinc-800 px-5 py-5">
-          <div class="flex flex-col gap-4">
-            <section v-for="col in columns" :key="col.key" :data-report-group="col.key" class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/35">
-              <header class="flex items-center justify-between gap-4 border-b border-zinc-800 px-4 py-4">
-                <div class="min-w-0"><h3 class="truncate text-sm font-semibold text-zinc-100">{{ col.title }}</h3><p class="mt-0.5 text-[11px] text-zinc-500">{{ agentsOf(col).length }} {{ agentsOf(col).length === 1 ? "agente" : "agentes" }}</p></div>
-                <div class="flex shrink-0 items-center gap-4 sm:gap-6">
-                  <div class="text-right"><span class="block text-[10px] uppercase tracking-wide text-zinc-500">Ações</span><strong class="text-sm font-semibold tabular-nums text-zinc-200">{{ formatActions(groupActionsToday(col)) }}</strong></div>
-                  <div class="text-right"><span class="block text-[10px] uppercase tracking-wide text-zinc-500">Tempo</span><strong class="text-sm font-semibold tabular-nums text-violet-300">{{ groupWorkedToday(col) }}</strong></div>
-                </div>
-              </header>
-              <div class="grid grid-cols-[minmax(0,1fr)_4.5rem_6.5rem] gap-2 px-4 pb-1 pt-3 text-[10px] uppercase tracking-wider text-zinc-500"><span>Agente</span><span class="text-right">Ações</span><span class="text-right">Tempo</span></div>
-              <div v-for="c in agentsOf(col)" :key="c.dot.id" :data-report-agent="c.dot.id" class="grid grid-cols-[minmax(0,1fr)_4.5rem_6.5rem] items-center gap-2 px-4 py-2.5 text-sm text-zinc-300 odd:bg-zinc-800/20">
-                <span class="flex min-w-0 items-center gap-2.5"><Avatar :name="c.dot.name" :seed="c.dot.id" size="sm" /><span class="truncate">{{ c.dot.name }}</span></span>
-                <span class="text-right tabular-nums text-zinc-400">{{ formatActions(actionsToday(c.dot.id)) }}</span>
-                <span class="text-right font-medium tabular-nums text-zinc-200">{{ workedToday(c.dot.id) }}</span>
-              </div>
-            </section>
-          </div>
-          <p class="mt-4 text-[11px] leading-relaxed text-zinc-500">Ações: chamadas de ferramenta registradas. Tempo: chamadas com retorno, sem esperas por aprovação. Períodos simultâneos contam uma vez; raciocínio sem eventos fica fora.</p>
-        </div>
-      </section>
     </div>
   </div>
 </template>

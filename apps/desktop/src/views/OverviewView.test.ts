@@ -11,7 +11,7 @@ import OverviewView from "./OverviewView.vue";
 import { useContactsStore } from "@/stores/contacts";
 import { useTeamsStore } from "@/stores/teams";
 
-describe("relatório da visão geral", () => {
+describe("visão geral", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 9, 19, 12));
@@ -20,7 +20,7 @@ describe("relatório da visão geral", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("abre fechado e mostra ações e tempo por grupo e agente ao expandir", async () => {
+  it("mostra o estado e o tempo observado hoje ao lado de cada DOT, sem o relatório do dia", async () => {
     const iso = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
     invoke.mockImplementation(async (_command: string, args: { method: string }) => {
       if (args.method === "executions.observed_activity_in_period") return [
@@ -29,7 +29,6 @@ describe("relatório da visão geral", () => {
         { dot_id: "jose", started_at: iso(19, 11, 45), finished_at: iso(19, 12) },
         { dot_id: "bruno", started_at: iso(19, 10), finished_at: iso(19, 10, 35) },
       ];
-      if (args.method === "executions.tool_calls_in_period") return { jose: 3, bruno: 2 };
       throw new Error(`chamada inesperada: ${args.method}`);
     });
     useContactsStore().items = [
@@ -50,23 +49,13 @@ describe("relatório da visão geral", () => {
     expect(paused?.find(".ball.paused").exists()).toBe(true);
     expect(paused?.text()).toContain("Pausado");
     expect(paused?.find(".ball.working").exists()).toBe(false);
-    const toggle = wrapper.find('button[aria-controls="today-report-details"]');
-    expect(toggle.attributes("aria-expanded")).toBe("false");
-    expect(wrapper.find("#today-report-details").exists()).toBe(false);
-    expect(wrapper.text()).toContain("2h 20min");
-    await toggle.trigger("click");
-    expect(toggle.attributes("aria-expanded")).toBe("true");
-    const group = wrapper.find('[data-report-group="faturamento"]');
-    expect(group.find("header").text()).toContain("Faturamento");
-    expect(group.find("header").text()).toContain("2h 20min");
-    expect(group.find("header").text()).toContain("5");
-    expect(group.find('[data-report-agent="jose"]').text()).toContain("32h 05min");
-    expect(group.find('[data-report-agent="bruno"]').text()).toContain("20h 35min");
-    await toggle.trigger("click");
-    expect(toggle.attributes("aria-expanded")).toBe("false");
-    expect(wrapper.find("#today-report-details").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Relatório de hoje");
+    expect(wrapper.find('button[aria-controls="today-report-details"]').exists()).toBe(false);
+    const jose = wrapper.findAll(".row").find((row) => row.text().includes("Jose"));
+    expect(jose?.text()).toContain("2h 05min");
+    expect(paused?.text()).toContain("0h 35min");
     expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.observed_activity_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
-    expect(invoke).toHaveBeenCalledWith("ipc_call", { method: "executions.tool_calls_in_period", params: { start_at: iso(19, 0), end_at: iso(20, 0) } });
+    expect(invoke).not.toHaveBeenCalledWith("ipc_call", expect.objectContaining({ method: "executions.tool_calls_in_period" }));
     wrapper.unmount();
   });
 });
