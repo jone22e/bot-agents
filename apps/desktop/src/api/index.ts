@@ -26,12 +26,20 @@ export interface FlexiBrowserLogin {
   poll_interval_ms: number;
 }
 
-/** Canal WebSocket entre o runtime e o Flexi web (IPC `apps.flexi.link_status`, evento `flexi_link.changed`). */
+/** Sincronizacao REST entre o runtime e o Flexi web (IPC `apps.flexi.link_status`, evento `flexi_link.changed`, ADR 0016). */
 export interface FlexiLinkStatus {
   connected: boolean;
   since: string | null;
+  last_sync: string | null;
   last_error: string | null;
   base_url: string | null;
+}
+
+/** Usuario da base do Flexi, para escolher com quem compartilhar um DOT (IPC `apps.flexi.users`). */
+export interface FlexiUser {
+  id: number;
+  nome: string;
+  email: string;
 }
 
 /** Estado do navegador proprio de um DOT (IPC `browser.status`). */
@@ -205,10 +213,12 @@ export const api = {
     flexiBrowserCancel: (token: string) => ipcCall<{ ok: boolean }>("apps.flexi.browser_cancel", { token }),
     flexiPhoto: (id: string) => ipcCall<{ data_url: string | null }>("apps.flexi.photo", { id }),
     flexiTemplates: () => ipcCall<FlexiRoleTemplate[]>("apps.flexi.templates"),
-    /** Canal WebSocket entre o runtime e o Flexi web (ADR 0015). */
+    /** Estado da sincronizacao com o Flexi web (ADR 0016). */
     flexiLinkStatus: () => ipcCall<FlexiLinkStatus>("apps.flexi.link_status"),
-    /** Fecha e reabre o canal com o Flexi web (quando o Flexi diz que o app nao esta conectado). */
+    /** Sincroniza com o Flexi web agora, sem esperar o proximo ciclo. */
     flexiLinkReconnect: () => ipcCall<FlexiLinkStatus>("apps.flexi.link_reconnect"),
+    /** Usuarios da base da conta do usuario, para compartilhar um DOT. */
+    flexiUsers: () => ipcCall<FlexiUser[]>("apps.flexi.users"),
     flexiCreateTeam: (id: string) => ipcCall<{ created: { template: string; dot_id: string }[] }>("apps.flexi.create_team", { id }),
     integration: (dot_id: string, kind = "flexi") => ipcCall<DotIntegration | null>("dots.integration", { dot_id, kind }),
     assignRole: (dot_id: string, connection_id: string, opts: { template_id?: string | null; group: string | null; role: "worker" | "supervisor" }) =>

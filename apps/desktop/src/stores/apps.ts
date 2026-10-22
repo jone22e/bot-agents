@@ -23,7 +23,7 @@ export const useAppsStore = defineStore("apps", {
     browserLogin: null as FlexiBrowserLogin | null,
     /** Foto de perfil (data URL) da conta do usuario. */
     photo: null as string | null,
-    /** Canal com o Flexi web; `null` enquanto nao foi consultado. */
+    /** Sincronizacao com o Flexi web; `null` enquanto nao foi consultada. */
     link: null as FlexiLinkStatus | null,
   }),
   getters: {
@@ -102,9 +102,9 @@ export const useAppsStore = defineStore("apps", {
     },
     cancelBrowserLogin() { this.browserLogin = null; },
     async loadLink() {
-      try { this.link = await api.apps.flexiLinkStatus(); } catch { /* runtime antigo sem o canal */ }
+      try { this.link = await api.apps.flexiLinkStatus(); } catch { /* runtime antigo sem a sincronizacao */ }
     },
-    /** Fecha e reabre o canal com o Flexi web; o estado novo chega pelo evento `flexi_link.changed`. */
+    /** Sincroniza com o Flexi web agora; o estado novo chega pelo evento `flexi_link.changed`. */
     async reconnectLink() {
       this.busy = true;
       try { await api.apps.flexiLinkReconnect(); this.error = null; }

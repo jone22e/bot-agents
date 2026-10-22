@@ -109,9 +109,9 @@ async function createTeam() {
     <div v-if="apps.flexi.length" class="border-t border-zinc-800 px-5 py-3 text-xs text-zinc-400">
       <p v-if="accountId && apps.link" class="mb-1.5 flex items-center gap-1.5" :class="apps.link.connected ? 'text-emerald-400' : 'text-zinc-500'">
         <span class="h-1.5 w-1.5 rounded-full" :class="apps.link.connected ? 'bg-emerald-400' : 'bg-zinc-600'"></span>
-        <span v-if="apps.link.connected">Conectado ao Flexi web</span>
-        <span v-else>Sem conexão com o Flexi web{{ apps.link.last_error ? `: ${apps.link.last_error}` : '' }}</span>
-        <button class="ml-auto inline-flex items-center gap-1 font-medium text-violet-300 hover:text-violet-200 disabled:opacity-50" :disabled="apps.busy" title="Fecha e reabre o canal com o Flexi web" @click="apps.reconnectLink()"><RefreshCw :size="12" /> Reconectar canal</button>
+        <span v-if="apps.link.connected">Sincronizado com o Flexi web</span>
+        <span v-else>Sem sincronização com o Flexi web{{ apps.link.last_error ? `: ${apps.link.last_error}` : '' }}</span>
+        <button class="ml-auto inline-flex items-center gap-1 font-medium text-violet-300 hover:text-violet-200 disabled:opacity-50" :disabled="apps.busy" title="Envia e busca agora as novidades do Flexi web" @click="apps.reconnectLink()"><RefreshCw :size="12" /> Sincronizar agora</button>
       </p>
       <p v-if="agentConnection">Os agentes acessam o Flexi como <strong class="text-zinc-200">{{ displayName(agentConnection) }}</strong>. Sua conta continua sendo usada para entrar no DOTS.</p>
       <p v-else>Escolha acima uma conta para os agentes acessarem o Flexi. Sua conta de login não é usada automaticamente por eles.</p>

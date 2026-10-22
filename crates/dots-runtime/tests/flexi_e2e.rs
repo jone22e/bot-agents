@@ -312,7 +312,7 @@ async fn browser_login_creates_connection_and_reuses_it_on_relogin() {
 
 #[tokio::test]
 async fn link_reconnect_is_accepted_without_an_account() {
-    // Sem conta ligada nao ha canal; o pedido de reconexao e aceito, fica na auditoria e devolve o estado atual.
+    // Sem conta ligada nao ha sincronizacao; o pedido e aceito, fica na auditoria e devolve o estado atual.
     let rt = start().await;
     let before = rt.call("apps.flexi.link_status", json!({})).await;
     assert_eq!(before["connected"], json!(false));

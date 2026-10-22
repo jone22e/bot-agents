@@ -51,11 +51,11 @@ describe("contas do Flexi", () => {
     expect(apps.flexi).toHaveLength(2);
   });
 
-  it("reabre o canal com o Flexi web pelo botao Reconectar canal", async () => {
+  it("sincroniza com o Flexi web pelo botao Sincronizar agora", async () => {
     const settings = useSettingsStore();
     settings.loaded = true;
     settings.items[ACCOUNT_CONNECTION] = "pessoal";
-    const link = { connected: true, since: "2026-10-22T14:46:21Z", last_error: null, base_url: "https://flexi.teste.com" };
+    const link = { connected: true, since: "2026-10-22T14:46:21Z", last_sync: "2026-10-22T14:46:21Z", last_error: null, base_url: "https://flexi.teste.com" };
     invoke.mockImplementation(async (_command: string, args: { method: string }) => {
       if (args.method === "apps.list") return [connection("pessoal", "Jone")];
       if (args.method === "apps.flexi.link_status") return link;
@@ -68,8 +68,8 @@ describe("contas do Flexi", () => {
     const wrapper = mount(FlexiCard, { global: { plugins: [router], stubs: { FlexiBrowserLogin: true, ConfirmDialog: true, Toggle: true, ErrorBanner: true } } });
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Conectado ao Flexi web");
-    const button = wrapper.findAll("button").find((b) => b.text().includes("Reconectar canal"));
+    expect(wrapper.text()).toContain("Sincronizado com o Flexi web");
+    const button = wrapper.findAll("button").find((b) => b.text().includes("Sincronizar agora"));
     expect(button).toBeDefined();
     await button!.trigger("click");
     await flushPromises();
