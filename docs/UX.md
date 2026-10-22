@@ -116,6 +116,31 @@ O menu principal mantem os sete itens da especificacao.
   conversa do demitido zeram (a conversa nova nasce limpa) e ele volta como funcionario novo na mesma equipe; motivo e licao ficam na tabela
   `dismissals` e entram nas instrucoes de todos os funcionarios da equipe (e do gerente) para ninguem repetir o erro.
   Perfil do DOT > Equipe > Demissoes e a pagina Equipes mostram o historico.
+- **Dropdown ao lado de "Visao geral"** (seta no topo, com o numero de decisoes pendentes): abre Central de aprovacoes e
+  Avaliacao de desempenho, cada uma com a descricao em uma linha; nenhuma das duas fica exposta no cabecalho.
+- **Central de aprovacoes** (`ApprovalsView.vue`, rota `/approvals`): fila unica, da mais antiga para a mais nova, de tudo que espera a decisao do usuario (perguntas e pedidos de
+  permissao de qualquer DOT). Cada item mostra quem pede, justificativa (o que ele quer fazer), impacto previsto (risco e
+  recursos afetados), evidencias (ferramenta e parametros exatos, recolhidos), atalho para a conversa e o mesmo cartao de
+  resposta da conversa (aprovar, rejeitar, responder ou dizer o que fazer diferente). O historico recente fica recolhido no fim.
+- **Avaliacao de desempenho** (`PerformanceView.vue`, rota `/performance`, calculo em `lib/performance.ts`): ultimos 7 ou 30
+  dias, no total e por DOT. Taxa de sucesso (concluidas / encerradas), reincidencia (nova tentativa ou titulo que ja tinha
+  falhado no periodo), custo por operacao (custo informado pelas execucoes / tarefas encerradas), tempo de resolucao
+  (mediana entre criacao e conclusao), acoes revertidas (negadas pela politica, rejeitadas pelo usuario ou desfeitas via git:
+  restore, reset, clean, stash) e intervencao humana (tarefas com pedido de permissao ou pergunta). Tudo vem de IPCs
+  existentes (`tasks.list`, `executions.in_period`, `approvals.list`, `audit.list`), sem backend novo.
+- **Menu rapido do DOT** (`DotQuickMenu.vue`): clicar no nome do DOT no topo da conversa abre primeiro um menu, nao o
+  perfil: avatar e estado ("Ativo · proxima rodada em N min", "Trabalhando", "Pausado"), botoes "Executar agora" (roda ja o
+  pedido do agendamento ativo; sem agendamento, pede que siga o objetivo; desabilitado pausado ou ocupado) e Pausar/Retomar;
+  linhas Modelo (botao "Trocar" abre o seletor ali mesmo e grava na hora), Agendamento (abre o perfil em Gatilhos) e Editar
+  instrucoes (abre o perfil em Sobre); "Ver perfil completo" abre o perfil no menu de secoes. Fecha com Esc ou clique fora.
+- **Notificacoes do DOT** (`dots_notify_user`, `crates/dots-runtime/src/delegation.rs`, tabela `notifications`): um DOT avisa o
+  usuario de algo que precisa dele (erro que o impede de continuar, pendencia, resultado importante) com titulo, detalhe e rotulo
+  do botao. O aviso vira um balao fixo no topo (`NotificationPill.vue`): fechado mostra "X precisa de voce" com o primeiro aviso
+  (ou "N agentes precisam de voce" com um resumo), "+N" quando o mesmo DOT tem mais avisos; "Ver" abre a lista com uma acao por
+  aviso e "Limpar". Nada some sozinho: so o clique do usuario limpa (botao do aviso ou abrir a conversa do DOT limpa os dele;
+  "Limpar" limpa todos). Na lista de contatos o DOT com aviso ganha anel violeta na linha e um ponto violeta no avatar ate o
+  clique. Fora de foco, o app pede atencao no Dock. IPC `notifications.list` / `notifications.clear`; evento `notification.changed`.
+  Perguntas e permissoes continuam na faixa ambar (`ManagerRequestAlert.vue`); a notificacao nao e pergunta nem bloqueia o DOT.
 - **Pausa pelo gerente** (`dots_pause_employee` / `dots_resume_employee`, `crates/dots-runtime/src/staffing.rs`): o gerente
   pausa e retoma um funcionario da propria equipe sem aprovacao do usuario (reversivel). Pausado, o funcionario nao recebe
   trabalho novo e o que estava na fila espera. Pelo usuario, pausar o gerente pausa os funcionarios ativos e retomar o
