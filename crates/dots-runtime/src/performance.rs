@@ -185,6 +185,33 @@ pub fn total_performance(rows: &[DotPerformance]) -> DotPerformance {
     t
 }
 
+impl crate::service::RuntimeService {
+    /// Resumo de desempenho dos ultimos 7 ou 30 dias (qualquer outro valor vira 7), calculado aqui no runtime.
+    /// Usado pelo app desktop (IPC `performance.summary`) e pelo Flexi web: o calculo fica no servidor para
+    /// nao trafegar todas as tarefas pelo IPC, cujo frame e limitado a `dots_ipc::MAX_FRAME_BYTES`.
+    pub async fn performance_summary(&self, days: u64) -> dots_core::DotsResult<serde_json::Value> {
+        let days = if days == 30 { 30 } else { 7 };
+        let end = dots_core::now();
+        let start = end - chrono::Duration::days(days as i64);
+        let (s0, e0) = (start, end);
+        let (tasks, executions, approvals, audit, dots) = self
+            .storage
+            .call(move |s| {
+                let tasks = s.tasks().list(&dots_storage::repos::TaskFilter { dot_id: None, status: None, conversation_id: None, limit: 2000 })?;
+                let executions = s.executions().list_overlapping(&s0, &e0)?;
+                let approvals = s.approvals().list(false, 200)?;
+                let audit = s.audit().list_recent(2000)?;
+                let dots = s.dots().list(true)?;
+                Ok((tasks, executions, approvals, audit, dots))
+            })
+            .await?;
+        let dot_names: HashMap<String, String> = dots.into_iter().map(|d| (d.id, d.name)).collect();
+        let rows = compute_performance(&PerformanceInput { tasks: &tasks, executions: &executions, approvals: &approvals, audit: &audit, dot_names: &dot_names, start, end });
+        let total = total_performance(&rows);
+        Ok(serde_json::json!({ "start": start, "end": end, "days": days, "total": total, "dots": rows }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

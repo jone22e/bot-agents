@@ -1,37 +1,30 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import Avatar from "@/components/Avatar.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { api, RuntimeError } from "@/api";
-import { computePerformance, duration, pct, totalPerformance, usd, type DotPerformance } from "@/lib/performance";
-import { useDotsStore } from "@/stores/dots";
+import { duration, pct, totalPerformance, usd, type DotPerformance } from "@/lib/performance";
 
 /**
  * Avaliacao de desempenho: taxa de sucesso, reincidencia, custo por operacao, tempo de resolucao, acoes revertidas
- * e tarefas que exigiram intervencao humana, por DOT e no total, nos ultimos 7 ou 30 dias (ver `lib/performance.ts`).
+ * e tarefas que exigiram intervencao humana, por DOT e no total, nos ultimos 7 ou 30 dias. O calculo e feito no
+ * runtime (IPC `performance.summary`, mesmas regras de `lib/performance.ts`): trazer todas as tarefas para calcular
+ * aqui estourava o limite de tamanho do frame IPC e derrubava a conexao.
  */
 const router = useRouter();
-const dots = useDotsStore();
 const days = ref<7 | 30>(7);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const rows = ref<DotPerformance[]>([]);
-const total = computed(() => totalPerformance(rows.value));
+const total = ref<DotPerformance>(totalPerformance([]));
 
 async function load() {
   loading.value = true;
-  const end = new Date();
-  const start = new Date(end.getTime() - days.value * 86400000);
   try {
-    if (!dots.items.length) await dots.load();
-    const [tasks, executions, approvals, audit] = await Promise.all([
-      api.tasks.list({ limit: 2000 }),
-      api.executions.inPeriod(start.toISOString(), end.toISOString()),
-      api.approvals.list(false, 200),
-      api.audit.list(2000),
-    ]);
-    rows.value = computePerformance({ tasks, executions, approvals, audit, start, end, dotNames: new Map(dots.items.map((d) => [d.id, d.name])) });
+    const summary = await api.performance.summary(days.value);
+    rows.value = summary.dots;
+    total.value = summary.total;
     error.value = null;
   } catch (e) {
     error.value = e instanceof RuntimeError ? e.message : String(e);

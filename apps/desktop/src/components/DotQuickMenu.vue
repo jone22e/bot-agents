@@ -82,7 +82,7 @@ onUnmounted(() => {
 <template>
   <div ref="el" role="menu" :aria-label="`Menu de ${current.name}`" class="pop absolute left-1/2 top-full z-40 mt-1 w-[330px] -translate-x-1/2 rounded-2xl border border-zinc-700/80 bg-zinc-950/95 p-3 text-sm text-zinc-100 shadow-2xl backdrop-blur" data-testid="dot-quick-menu">
     <div class="flex items-center gap-3 px-1">
-      <span class="rounded-full ring-2" :class="current.status === 'paused' ? 'ring-amber-400' : 'ring-emerald-500'"><Avatar :name="current.name" :seed="current.id" size="md" /></span>
+      <span class="inline-flex shrink-0 rounded-full ring-2" :class="current.status === 'paused' ? 'ring-amber-400' : 'ring-emerald-500'"><Avatar :name="current.name" :seed="current.id" size="md" /></span>
       <div class="min-w-0 flex-1">
         <p class="truncate font-semibold">{{ current.name }}</p>
         <p class="flex items-center gap-1.5 truncate text-xs text-zinc-400"><span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full" :class="current.status === 'paused' ? 'bg-amber-400' : 'bg-emerald-400'" />{{ statusText }}</p>

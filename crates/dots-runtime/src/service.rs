@@ -341,6 +341,13 @@ struct LimitParams {
     #[serde(default = "default_limit")]
     limit: u32,
 }
+
+/// Periodo da avaliacao de desempenho em dias (7 ou 30; ausente vira 7).
+#[derive(Deserialize, Default)]
+struct DaysParams {
+    #[serde(default)]
+    days: u64,
+}
 fn default_limit() -> u32 {
     100
 }
@@ -638,6 +645,10 @@ impl RuntimeService {
                 Ok(json!(self.storage.call(move |s| s.delegations().list_recent(limit)).await?))
             }
             "stats.get" => Ok(json!(self.stats().await?)),
+            "performance.summary" => {
+                let DaysParams { days } = p(params).unwrap_or_default();
+                self.performance_summary(days).await
+            }
             "runtime.logs" => {
                 let LinesParams { lines } = p(params).unwrap_or_default();
                 Ok(json!(self.tail_log(lines as usize)))

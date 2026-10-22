@@ -3,9 +3,19 @@ import type {
   EngineKind, Execution, ExecutionEventRecord, GroupMessage, Installation, LearnedPermission, Memory, MemoryCreate, MemoryKind, MemoryUpdate, Message, Notification, Overview,
   RuntimeStatus, Setting, Task, TaskCreate, TaskStatus, ToolPolicy, ToolPolicyUpdate, WorkspaceChange,
 } from "@dots/shared-types";
+import type { DotPerformance } from "@/lib/performance";
 import { ipcCall } from "./ipc";
 
 export { ipcCall, mediaApi, runtimeApi, RuntimeError } from "./ipc";
+
+/** Avaliacao de desempenho calculada no runtime (IPC `performance.summary`), por DOT e no total. */
+export interface PerformanceSummary {
+  start: string;
+  end: string;
+  days: 7 | 30;
+  total: DotPerformance;
+  dots: DotPerformance[];
+}
 
 /** Pedido de "Logar com Flexi" (IPC `apps.flexi.browser_start`): abrir `authorize_url` no navegador. */
 export interface FlexiBrowserLogin {
@@ -120,6 +130,7 @@ export const api = {
     events: (execution_id: string, after_seq = 0, limit = 2000) => ipcCall<ExecutionEventRecord[]>("executions.events", { execution_id, after_seq, limit }),
     changes: (id: string) => ipcCall<WorkspaceChange[]>("executions.changes", { id }),
   },
+  performance: { summary: (days: 7 | 30) => ipcCall<PerformanceSummary>("performance.summary", { days }) },
   contacts: { list: () => ipcCall<Contact[]>("contacts.list") },
   conversations: {
     main: (dot_id: string) => ipcCall<Conversation>("conversations.main", { dot_id }),

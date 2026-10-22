@@ -5,7 +5,6 @@
 //! ao vivo, a Central de Aprovacoes e a Avaliacao de desempenho; as decisoes tomadas no Flexi web voltam
 //! pelo mesmo canal. Nada e copiado para o banco do Flexi.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -115,25 +114,7 @@ impl RuntimeService {
             }
             "performance.summary" => {
                 let days = params.get("days").and_then(Value::as_u64).unwrap_or(7);
-                let days = if days == 30 { 30 } else { 7 };
-                let end = dots_core::now();
-                let start = end - chrono::Duration::days(days as i64);
-                let (s0, e0) = (start, end);
-                let (tasks, executions, approvals, audit, dots) = self
-                    .storage
-                    .call(move |s| {
-                        let tasks = s.tasks().list(&dots_storage::repos::TaskFilter { dot_id: None, status: None, conversation_id: None, limit: 2000 })?;
-                        let executions = s.executions().list_overlapping(&s0, &e0)?;
-                        let approvals = s.approvals().list(false, 200)?;
-                        let audit = s.audit().list_recent(2000)?;
-                        let dots = s.dots().list(true)?;
-                        Ok((tasks, executions, approvals, audit, dots))
-                    })
-                    .await?;
-                let dot_names: HashMap<String, String> = dots.into_iter().map(|d| (d.id, d.name)).collect();
-                let rows = crate::performance::compute_performance(&crate::performance::PerformanceInput { tasks: &tasks, executions: &executions, approvals: &approvals, audit: &audit, dot_names: &dot_names, start, end });
-                let total = crate::performance::total_performance(&rows);
-                Ok(json!({ "start": start, "end": end, "days": days, "total": total, "dots": rows }))
+                self.performance_summary(days).await
             }
             "status" => {
                 let (pending, dots) = self.flexi_link_counts().await?;
