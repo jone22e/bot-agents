@@ -29,6 +29,9 @@ const BACKOFF_MAX: u64 = 60;
 /// `KEEPALIVE_TIMEOUT`, considera o socket morto (rede trocou, servidor descartou) e reabre sozinho.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(75);
+// Na troca blue/green, o socket antigo pode continuar vivo no backend que saiu
+// da rota HTTP. Reabrir periodicamente faz o canal seguir a rota ativa.
+const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 /// Evento interno (IPC `apps.flexi.link_reconnect`): fecha e reabre o canal na hora.
 pub const RECONNECT_EVENT: &str = "flexi_link.reconnect";
 /// Eventos do runtime que mudam o que o Flexi mostra (pendentes e quantidade de DOTs).
@@ -186,6 +189,12 @@ enum SessionEnd {
     Reconnect,
 }
 
+fn end_from_close(frame: Option<tokio_tungstenite::tungstenite::protocol::CloseFrame>) -> SessionEnd {
+    let unauthorized = frame.as_ref().is_some_and(|f| u16::from(f.code) == 1008);
+    let reason = frame.map(|f| format!("fechado pelo Flexi ({}: {})", u16::from(f.code), f.reason)).unwrap_or_else(|| "fechado pelo Flexi".into());
+    if unauthorized { SessionEnd::Unauthorized(reason) } else { SessionEnd::Closed(reason) }
+}
+
 async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, rx: &mut broadcast::Receiver<dots_ipc::Event>) -> SessionEnd {
     let url = match ws_url(&conn.base_url) {
         Ok(u) => u,
@@ -222,11 +231,17 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
     tracing::info!(url = %url, "canal com o Flexi web aberto");
 
     let mut shutdown = Box::pin(svc.shutdown.clone().wait());
+    let refresh_session = tokio::time::sleep(SESSION_REFRESH_INTERVAL);
+    tokio::pin!(refresh_session);
     let mut last_rx = tokio::time::Instant::now();
     let mut keepalive = tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL);
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            _ = &mut refresh_session => {
+                let _ = sink.send(Message::Close(None)).await;
+                return SessionEnd::Reconnect;
+            }
             _ = &mut shutdown => {
                 let _ = sink.send(Message::Close(None)).await;
                 return SessionEnd::Closed("runtime encerrando".into());
@@ -243,6 +258,10 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
             }
             ev = rx.recv() => match ev {
                 Ok(ev) if ev.event == RECONNECT_EVENT => {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return SessionEnd::Reconnect;
+                }
+                Ok(ev) if ev.event == "apps.changed" => {
                     let _ = sink.send(Message::Close(None)).await;
                     return SessionEnd::Reconnect;
                 }
@@ -267,8 +286,7 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
                     }
                 }
                 Some(Ok(Message::Close(frame))) => {
-                    let reason = frame.map(|f| format!("fechado pelo Flexi ({}: {})", u16::from(f.code), f.reason)).unwrap_or_else(|| "fechado pelo Flexi".into());
-                    return SessionEnd::Closed(reason);
+                    return end_from_close(frame);
                 }
                 Some(Ok(Message::Text(text))) => {
                     match serde_json::from_str::<Incoming>(text.as_str()) {
@@ -350,7 +368,7 @@ pub async fn run(svc: Arc<RuntimeService>) {
                 tokio::time::sleep(Duration::from_secs(BACKOFF_MIN)).await;
             }
             SessionEnd::Reconnect => {
-                tracing::info!("canal com o Flexi web fechado a pedido do usuario; reabrindo");
+                tracing::info!("canal com o Flexi web reabrindo");
                 svc.set_link(false, Some(conn.base_url.clone()), None);
                 backoff = BACKOFF_MIN;
             }
@@ -376,6 +394,15 @@ pub async fn run(svc: Arc<RuntimeService>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+
+    #[test]
+    fn fechamento_por_sessao_invalida_pede_renovacao() {
+        let unauthorized = end_from_close(Some(CloseFrame { code: CloseCode::Policy, reason: "unauthorized".into() }));
+        assert!(matches!(unauthorized, SessionEnd::Unauthorized(_)));
+        let ordinary = end_from_close(Some(CloseFrame { code: CloseCode::Normal, reason: "replaced".into() }));
+        assert!(matches!(ordinary, SessionEnd::Closed(_)));
+    }
 
     #[test]
     fn monta_url_do_websocket() {
