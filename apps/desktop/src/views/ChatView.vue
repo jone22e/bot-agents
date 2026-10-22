@@ -405,7 +405,7 @@ function autosize() {
           <div class="row">
             <button type="button" class="icon attach" title="Anexar arquivos (ou arraste/cole na janela)" @click="pickFiles"><Paperclip :size="15" /></button>
             <span class="spacer" />
-            <div v-if="dictation.supported" class="dictate" :class="dictation.phase.value">
+            <div v-if="dictation.supported && runtime.launchd?.supported" class="dictate" :class="dictation.phase.value">
               <template v-if="dictation.phase.value === 'recording'">
                 <button type="button" class="icon dict-x" title="Descartar a gravação" @click="dictation.cancel"><X :size="13" /></button>
                 <span class="dict-time mono">{{ dictation.time.value }}</span>

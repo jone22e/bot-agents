@@ -122,7 +122,7 @@ async function pickTheme(id: string) {
             </label>
             <p v-if="concurrencyRestartNeeded" class="text-xs text-amber-300">Limite salvo. Reinicie em Serviço em segundo plano quando os trabalhos atuais terminarem para aplicar.</p>
             <ErrorBanner :message="concurrencyError" />
-            <Toggle v-if="runtime.paths && !runtime.paths.dev_mode" :model-value="runtime.paths.start_at_login" label="Iniciar com o Mac" description="Gatilhos e horarios funcionam mesmo sem abrir o app." @update:model-value="(v) => runtime.setStartAtLogin(v)" />
+            <Toggle v-if="runtime.paths && !runtime.paths.dev_mode && runtime.launchd?.supported" :model-value="runtime.paths.start_at_login" label="Iniciar com o Mac" description="Gatilhos e horarios funcionam mesmo sem abrir o app." @update:model-value="(v) => runtime.setStartAtLogin(v)" />
           </section>
           <section class="card space-y-4">
             <div class="flex items-center gap-2 text-sm font-semibold text-zinc-200"><HardDriveDownload :size="16" /> Atualização</div>
