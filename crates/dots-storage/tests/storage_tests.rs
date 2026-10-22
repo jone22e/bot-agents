@@ -27,7 +27,12 @@ fn approval_assessment_upgrade_preserves_existing_approvals() {
     let (_dir, opts) = temp_db();
     {
         let mut s = Storage::open_with(opts.clone(), &MIGRATIONS[..12]).unwrap();
-        let dot_id = s.dots().create("user", DotCreate { name: "Existente".into(), ..Default::default() }, None).unwrap().id;
+        // Insere direto: o repositorio de DOTs le colunas de migracoes mais novas (0014).
+        let dot_id = "dot-existente".to_string();
+        s.conn().execute(
+            "INSERT INTO dots (id, name, status, created_at, updated_at) VALUES (?1, 'Existente', 'active', ?2, ?2)",
+            params![dot_id, dots_core::now().to_rfc3339()],
+        ).unwrap();
         let task = s.tasks().create(dots_core::TaskCreate { dot_id: dot_id.clone(), prompt: "x".into(), ..Default::default() }, None).unwrap();
         let execution = s.executions().create(&task.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
         let now = dots_core::now().to_rfc3339();

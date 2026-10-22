@@ -69,8 +69,18 @@ Data: 2026-10-15. Plano aprovado em `docs/PHASE-FLEXI-PLAN.md`. Nenhuma alteraca
 
 `apps.list`, `apps.flexi.connect`, `apps.flexi.reconnect`, `apps.flexi.mfa`, `apps.flexi.check`, `apps.flexi.remove`,
 `apps.flexi.browser_start`, `apps.flexi.browser_poll`, `apps.flexi.browser_cancel`, `apps.flexi.photo`,
-`apps.flexi.templates`, `apps.flexi.create_team`, `apps.flexi.assign_role`, `teams.list|get|create|update|delete|set_manager|add_member|remove_member`, `dots.team`, `dots.integration`, `dots.set_integration`, `gateway.tools` (interno, com token
+`apps.flexi.templates`, `apps.flexi.create_team`, `apps.flexi.assign_role`, `apps.flexi.users`, `apps.flexi.link_status`,
+`apps.flexi.link_reconnect` (sincronizar agora), `teams.list|get|create|update|delete|set_manager|add_member|remove_member`, `dots.team`, `dots.integration`, `dots.set_integration`, `gateway.tools` (interno, com token
 de execucao).
+
+## Flexi web: agentes compartilhados (ADR 0016)
+
+No perfil do DOT, aba Aplicativos, "Compartilhar no Flexi" liga o DOT para usuarios escolhidos da base (lista vinda de
+`apps.flexi.users`). O `dotsd` sincroniza com o Flexi por REST (`flexi_sync.rs`, rotas `/api/agentes-dots/app/*`): registra
+os DOTs compartilhados, busca mensagens e decisoes a cada 4 s, responde pela conversa unica "Flexi" de cada DOT e devolve
+respostas, aprovacoes e desempenho. No Flexi web, o icone "Agentes DOTS" lista os agentes compartilhados com o usuario e abre
+a conversa (tipo grupo); o dono ve tambem Aprovacoes e Desempenho. Nao ha WebSocket nem porta aberta: serve para um
+computador Ubuntu ligado 24 h.
 
 ## Como validar
 

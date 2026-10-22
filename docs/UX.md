@@ -39,7 +39,8 @@ A interface e um mensageiro, nao um painel:
   pedido delegado vao ao gerente (tarefa "Pergunta de X", respondida com `dots_answer_question`) e o funcionario aparece como
   "Perguntou ao gerente" ou "Pediu permissao ao gerente", sem pedir atencao do usuario. Na linha compacta o nome vem
   inteiro e o cargo sem o prefixo da area ("Publicacao"). A tela Equipes (menu
-  do avatar) cria, renomeia, define gerente e funcionarios. A aba Equipe do perfil mostra "Gerente de" e "Funcionario de". O perfil ganha a aba **Aplicativos** (qual conexao o DOT usa). Uma conexao que precisa de atencao aparece como
+  do avatar) cria, renomeia, define gerente e funcionarios. A aba Equipe do perfil mostra "Gerente de" e "Funcionario de". O perfil ganha a aba **Aplicativos** (qual conexao o DOT usa e "Compartilhar no Flexi": interruptor + usuarios escolhidos,
+  que conversam com o DOT pelo Flexi web numa conversa unica, tipo grupo; ADR 0016). Uma conexao que precisa de atencao aparece como
   aviso ambar no topo da lista de contatos.
 - **Atividades** continua como pagina (atalho no menu do avatar) para a lista completa de trabalhos, o que aconteceu, pedidos
   pendentes e o painel de operacoes.
