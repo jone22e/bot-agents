@@ -41,6 +41,8 @@ export type { FailureKind } from "./generated/FailureKind";
 export type { GroupMessage } from "./generated/GroupMessage";
 export type { LearnedPermission } from "./generated/LearnedPermission";
 export type { FlexiConnectInput } from "./generated/FlexiConnectInput";
+export type { FlexiShare } from "./generated/FlexiShare";
+export type { FlexiShareUser } from "./generated/FlexiShareUser";
 export type { Installation } from "./generated/Installation";
 export type { Memory } from "./generated/Memory";
 export type { MemoryCreate } from "./generated/MemoryCreate";

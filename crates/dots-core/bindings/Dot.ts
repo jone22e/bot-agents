@@ -3,6 +3,7 @@ import type { DotLimits } from "./DotLimits";
 import type { DotRole } from "./DotRole";
 import type { DotStatus } from "./DotStatus";
 import type { EngineKind } from "./EngineKind";
+import type { FlexiShare } from "./FlexiShare";
 
 /**
  * Identidade persistente de um trabalhador digital.
@@ -19,4 +20,8 @@ model: string | null,
 /**
  * Caminho do workspace primario.
  */
-workspace_path: string | null, limits: DotLimits, status: DotStatus, role: DotRole, created_at: string, updated_at: string, };
+workspace_path: string | null, limits: DotLimits, status: DotStatus, role: DotRole, 
+/**
+ * Quem pode falar com este DOT pelo Flexi web; desligado por padrao.
+ */
+flexi_share: FlexiShare, created_at: string, updated_at: string, };

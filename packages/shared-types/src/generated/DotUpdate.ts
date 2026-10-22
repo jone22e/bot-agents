@@ -2,6 +2,7 @@
 import type { DotLimits } from "./DotLimits";
 import type { DotRole } from "./DotRole";
 import type { EngineKind } from "./EngineKind";
+import type { FlexiShare } from "./FlexiShare";
 
 export type DotUpdate = { name?: string | null, description?: string | null, objective?: string | null, instructions?: string | null, 
 /**
@@ -11,4 +12,8 @@ primary_engine?: EngineKind | null,
 /**
  * `Some(None)` volta ao padrao do motor; `None` mantem (ou limpa, se o motor mudar).
  */
-model?: string | null, workspace_path?: string | null, limits?: DotLimits | null, role?: DotRole | null, };
+model?: string | null, workspace_path?: string | null, limits?: DotLimits | null, role?: DotRole | null, 
+/**
+ * Substitui o compartilhamento no Flexi inteiro (interruptor e lista de usuarios).
+ */
+flexi_share?: FlexiShare | null, };
