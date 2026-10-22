@@ -65,6 +65,11 @@ impl EventSink {
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.tx.send(Event { event: event.to_string(), payload, seq });
     }
+
+    /// Assina os eventos do runtime (mesmo fluxo que os clientes IPC recebem).
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.tx.subscribe()
+    }
 }
 
 impl IpcServer {
