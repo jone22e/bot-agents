@@ -25,6 +25,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const IDLE_RETRY: Duration = Duration::from_secs(30);
 const BACKOFF_MIN: u64 = 5;
 const BACKOFF_MAX: u64 = 60;
+/// O app e quem vigia o canal: manda um ping a cada `KEEPALIVE_INTERVAL` e, sem nenhum frame do Flexi por
+/// `KEEPALIVE_TIMEOUT`, considera o socket morto (rede trocou, servidor descartou) e reabre sozinho.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(75);
+/// Evento interno (IPC `apps.flexi.link_reconnect`): fecha e reabre o canal na hora.
+pub const RECONNECT_EVENT: &str = "flexi_link.reconnect";
 /// Eventos do runtime que mudam o que o Flexi mostra (pendentes e quantidade de DOTs).
 const STATE_EVENTS: [&str; 4] = ["approval.requested", "approval.resolved", "dots.changed", "teams.changed"];
 
@@ -176,6 +182,8 @@ enum SessionEnd {
     /// 401/403 no handshake: a sessao do Flexi expirou.
     Unauthorized(String),
     Failed(String),
+    /// O usuario pediu para reabrir (`apps.flexi.link_reconnect`); reconecta sem esperar.
+    Reconnect,
 }
 
 async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, rx: &mut broadcast::Receiver<dots_ipc::Event>) -> SessionEnd {
@@ -214,13 +222,30 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
     tracing::info!(url = %url, "canal com o Flexi web aberto");
 
     let mut shutdown = Box::pin(svc.shutdown.clone().wait());
+    let mut last_rx = tokio::time::Instant::now();
+    let mut keepalive = tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL);
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = &mut shutdown => {
                 let _ = sink.send(Message::Close(None)).await;
                 return SessionEnd::Closed("runtime encerrando".into());
             }
+            _ = keepalive.tick() => {
+                let silence = last_rx.elapsed();
+                if silence > KEEPALIVE_TIMEOUT {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return SessionEnd::Closed(format!("sem resposta do Flexi ha {}s", silence.as_secs()));
+                }
+                if let Err(e) = sink.send(Message::Ping(Default::default())).await {
+                    return SessionEnd::Failed(e.to_string());
+                }
+            }
             ev = rx.recv() => match ev {
+                Ok(ev) if ev.event == RECONNECT_EVENT => {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return SessionEnd::Reconnect;
+                }
                 Ok(ev) if STATE_EVENTS.contains(&ev.event.as_str()) => {
                     let (pending, dots) = svc.flexi_link_counts().await.unwrap_or((0, 0));
                     if let Err(e) = sink.send(Message::text(state_message(pending, dots))).await {
@@ -231,7 +256,9 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => return SessionEnd::Closed("barramento de eventos fechado".into()),
             },
-            msg = stream.next() => match msg {
+            msg = stream.next() => {
+                if matches!(msg, Some(Ok(_))) { last_rx = tokio::time::Instant::now(); }
+                match msg {
                 None => return SessionEnd::Closed("conexao encerrada".into()),
                 Some(Err(e)) => return SessionEnd::Failed(e.to_string()),
                 Some(Ok(Message::Ping(p))) => {
@@ -260,12 +287,13 @@ async fn session(svc: &Arc<RuntimeService>, conn: &AppConnection, cookie: &str, 
                     }
                 }
                 Some(Ok(_)) => {}
+                }
             },
         }
     }
 }
 
-/// Espera `IDLE_RETRY` ou um evento `apps.changed` (nova conta, sessao renovada), o que vier primeiro.
+/// Espera `IDLE_RETRY`, um evento `apps.changed` (nova conta, sessao renovada) ou um pedido de reconexao, o que vier primeiro.
 async fn wait_for_account(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::Event>) {
     let mut shutdown = Box::pin(svc.shutdown.clone().wait());
     let sleep = tokio::time::sleep(IDLE_RETRY);
@@ -275,7 +303,7 @@ async fn wait_for_account(svc: &RuntimeService, rx: &mut broadcast::Receiver<dot
             _ = &mut shutdown => return,
             _ = &mut sleep => return,
             ev = rx.recv() => match ev {
-                Ok(ev) if ev.event == "apps.changed" => return,
+                Ok(ev) if ev.event == "apps.changed" || ev.event == RECONNECT_EVENT => return,
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
@@ -320,6 +348,11 @@ pub async fn run(svc: Arc<RuntimeService>) {
                 svc.set_link(false, Some(conn.base_url.clone()), None);
                 backoff = BACKOFF_MIN;
                 tokio::time::sleep(Duration::from_secs(BACKOFF_MIN)).await;
+            }
+            SessionEnd::Reconnect => {
+                tracing::info!("canal com o Flexi web fechado a pedido do usuario; reabrindo");
+                svc.set_link(false, Some(conn.base_url.clone()), None);
+                backoff = BACKOFF_MIN;
             }
             SessionEnd::Unauthorized(reason) => {
                 tracing::warn!(reason = %reason, "sessao do Flexi recusada no canal; tentando renovar");

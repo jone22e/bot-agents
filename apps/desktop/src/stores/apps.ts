@@ -104,6 +104,13 @@ export const useAppsStore = defineStore("apps", {
     async loadLink() {
       try { this.link = await api.apps.flexiLinkStatus(); } catch { /* runtime antigo sem o canal */ }
     },
+    /** Fecha e reabre o canal com o Flexi web; o estado novo chega pelo evento `flexi_link.changed`. */
+    async reconnectLink() {
+      this.busy = true;
+      try { await api.apps.flexiLinkReconnect(); this.error = null; }
+      catch (e) { this.error = e instanceof RuntimeError ? e.message : String(e); }
+      finally { this.busy = false; }
+    },
     async loadPhoto(id: string | null) {
       if (!id) { this.photo = null; return; }
       try { this.photo = (await api.apps.flexiPhoto(id)).data_url; } catch { this.photo = null; }

@@ -1000,6 +1000,12 @@ impl RuntimeService {
             }
             "apps.flexi.templates" => Ok(json!(self.flexi_templates(None).await)),
             "apps.flexi.link_status" => Ok(json!(self.flexi_link.status())),
+            "apps.flexi.link_reconnect" => {
+                // Fecha e reabre o canal com o Flexi web; a tarefa de fundo ouve o evento e reconecta na hora.
+                self.events.emit(crate::flexi_link::RECONNECT_EVENT, json!({}));
+                self.audit("apps.flexi.link_reconnect", "app", None, json!({})).await?;
+                Ok(json!(self.flexi_link.status()))
+            }
             "apps.flexi.create_team" => {
                 let IdParams { id } = p(params)?;
                 Ok(self.flexi_create_team(&id).await?)
@@ -1055,6 +1061,7 @@ impl RuntimeService {
                 let ctx = self.registry.context_by_token(&token).ok_or_else(|| DotsError::Unauthorized("token de execucao invalido".into()))?;
                 let mut tools = crate::tools::tool_definitions();
                 tools.extend(self.flexi_tools_for_dot(&ctx.dot_id).await);
+                crate::tools::add_approval_assessment_schema(&mut tools);
                 Ok(json!({ "tools": tools }))
             }
             "audit.list" => {

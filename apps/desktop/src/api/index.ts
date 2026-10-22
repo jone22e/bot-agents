@@ -207,6 +207,8 @@ export const api = {
     flexiTemplates: () => ipcCall<FlexiRoleTemplate[]>("apps.flexi.templates"),
     /** Canal WebSocket entre o runtime e o Flexi web (ADR 0015). */
     flexiLinkStatus: () => ipcCall<FlexiLinkStatus>("apps.flexi.link_status"),
+    /** Fecha e reabre o canal com o Flexi web (quando o Flexi diz que o app nao esta conectado). */
+    flexiLinkReconnect: () => ipcCall<FlexiLinkStatus>("apps.flexi.link_reconnect"),
     flexiCreateTeam: (id: string) => ipcCall<{ created: { template: string; dot_id: string }[] }>("apps.flexi.create_team", { id }),
     integration: (dot_id: string, kind = "flexi") => ipcCall<DotIntegration | null>("dots.integration", { dot_id, kind }),
     assignRole: (dot_id: string, connection_id: string, opts: { template_id?: string | null; group: string | null; role: "worker" | "supervisor" }) =>

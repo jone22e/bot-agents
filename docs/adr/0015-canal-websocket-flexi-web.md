@@ -40,6 +40,11 @@ O estado do canal fica em memoria (`RuntimeService::flexi_link`), e exposto pelo
 emitido como evento `flexi_link.changed` nas transicoes; o `EventSink` ganhou `subscribe()` para o runtime ouvir os
 proprios eventos.
 
+O app e quem vigia o canal (o custo fica no desktop, nao no servidor): manda um ping a cada 30 s e, sem nenhum frame
+do Flexi por 75 s, fecha e reabre sozinho (um socket morto em silencio, por troca de rede ou descarte no servidor,
+ficava "conectado" para sempre). O IPC `apps.flexi.link_reconnect` (botao "Reconectar canal" no cartao Flexi) emite
+`flexi_link.reconnect`, e a tarefa de fundo fecha e reabre na hora.
+
 ## Consequencias
 - Com o app fechado, o Flexi nao mostra nada dos agentes: o menu depende do app conectado.
 - Decisoes feitas no Flexi web passam pela mesma politica e auditoria das feitas no app.
