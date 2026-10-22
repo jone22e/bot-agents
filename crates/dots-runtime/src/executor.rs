@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn instructions_are_bounded_and_include_identity() {
-        let dot = dots_core::Dot { id: "d".into(), name: "QA".into(), description: "testa".into(), objective: "qualidade".into(), instructions: "seja rigoroso".into(), primary_engine: None, model: None, workspace_path: Some("/ws".into()), limits: Default::default(), status: dots_core::DotStatus::Active, role: DotRole::Worker, created_at: dots_core::now(), updated_at: dots_core::now() };
+        let dot = dots_core::Dot { id: "d".into(), name: "QA".into(), description: "testa".into(), objective: "qualidade".into(), instructions: "seja rigoroso".into(), primary_engine: None, model: None, workspace_path: Some("/ws".into()), limits: Default::default(), status: dots_core::DotStatus::Active, role: DotRole::Worker, flexi_share: Default::default(), created_at: dots_core::now(), updated_at: dots_core::now() };
         let policy = dots_core::ToolPolicy::default_for("d");
         let mems: Vec<dots_core::Memory> = (0..100).map(|i| dots_core::Memory { id: i.to_string(), dot_id: "d".into(), kind: MemoryKind::LongTerm, content: "x".repeat(200), importance: 0, source: None, created_at: dots_core::now(), updated_at: dots_core::now() }).collect();
         let lesson = dots_core::Dismissal { id: "x".into(), team_id: Some("t".into()), team_name: "Mercado Livre".into(), manager_dot_id: Some("m".into()), manager_name: "Milei".into(), dot_id: Some("d".into()), dot_name: "Lula".into(), reason: "publicou anuncio sem revisar o preco".into(), lesson: "revisar o preco antes de publicar".into(), memories_wiped: 3, created_at: dots_core::now() };

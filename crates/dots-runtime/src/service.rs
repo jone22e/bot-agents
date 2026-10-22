@@ -44,8 +44,8 @@ pub struct RuntimeService {
     pub browsers: crate::browser::BrowserPool,
     pub usage: crate::usage::UsageCache,
     pub cli_updates: crate::cli_updates::UpdatesCache,
-    /// Canal WebSocket com o Flexi web (ADR 0015).
-    pub flexi_link: crate::flexi_link::LinkState,
+    /// Sincronizacao REST com o Flexi web (ADR 0016).
+    pub flexi_link: crate::flexi_sync::LinkState,
 }
 
 #[derive(Deserialize)]
@@ -810,18 +810,7 @@ impl RuntimeService {
             }
             "conversations.send" => {
                 let ConvSendParams { conversation_id, content, attachments } = p(params)?;
-                let conv = self.storage.call({ let c = conversation_id.clone(); move |s| s.conversations().get(&c) }).await?;
-                let meta = if attachments.is_empty() { json!({}) } else { json!({ "attachments": attachments }) };
-                let msg = self.storage.call({ let (c, t) = (conversation_id.clone(), content.clone()); move |s| s.conversations().add_message(&c, MessageRole::User, &t, None, None, meta) }).await?;
-                if conv.message_count == 0 {
-                    let (c, title) = (conversation_id.clone(), content.chars().take(60).collect::<String>());
-                    let _ = self.storage.call(move |s| s.conversations().set_title(&c, &title)).await;
-                }
-                let task = self
-                    .create_task(TaskCreate { dot_id: conv.dot_id.clone(), prompt: content, kind: Some(TaskKind::Chat), conversation_id: Some(conversation_id.clone()), attachments, ..Default::default() })
-                    .await?;
-                self.events.emit("message.changed", json!({ "conversation_id": conversation_id, "message_id": msg.id }));
-                let _ = self.emit_event(et::USER_MESSAGE, "user", json!({ "dot_id": conv.dot_id, "conversation_id": conversation_id, "task_id": task.id, "message_id": msg.id }), None, Some(format!("msg:{}", msg.id)), 0).await;
+                let (msg, task) = self.send_conversation_message(&conversation_id, content, attachments, json!({})).await?;
                 Ok(json!({ "message": msg, "task": task }))
             }
             "conversations.attach" => {
@@ -1000,9 +989,10 @@ impl RuntimeService {
             }
             "apps.flexi.templates" => Ok(json!(self.flexi_templates(None).await)),
             "apps.flexi.link_status" => Ok(json!(self.flexi_link.status())),
+            "apps.flexi.users" => Ok(json!(self.flexi_users().await?)),
             "apps.flexi.link_reconnect" => {
-                // Fecha e reabre o canal com o Flexi web; a tarefa de fundo ouve o evento e reconecta na hora.
-                self.events.emit(crate::flexi_link::RECONNECT_EVENT, json!({}));
+                // Sincroniza com o Flexi web na hora; a tarefa de fundo ouve o evento.
+                self.events.emit(crate::flexi_sync::RECONNECT_EVENT, json!({}));
                 self.audit("apps.flexi.link_reconnect", "app", None, json!({})).await?;
                 Ok(json!(self.flexi_link.status()))
             }
@@ -1073,6 +1063,32 @@ impl RuntimeService {
     }
 
     /// Enfileira uma tarefa e acorda o scheduler.
+    /// Mensagem do usuario numa conversa: grava, abre a tarefa de chat e avisa a interface. `extra_meta` entra nos
+    /// metadados da mensagem (ex.: origem no Flexi web) e recebe `task_id` depois que a tarefa existe.
+    pub async fn send_conversation_message(&self, conversation_id: &str, content: String, attachments: Vec<String>, extra_meta: Value) -> DotsResult<(dots_core::Message, dots_core::Task)> {
+        let conversation_id = conversation_id.to_string();
+        let conv = self.storage.call({ let c = conversation_id.clone(); move |s| s.conversations().get(&c) }).await?;
+        let mut meta = match extra_meta { Value::Object(m) => Value::Object(m), _ => json!({}) };
+        if !attachments.is_empty() {
+            meta["attachments"] = json!(attachments);
+        }
+        let msg = self.storage.call({ let (c, t, m) = (conversation_id.clone(), content.clone(), meta.clone()); move |s| s.conversations().add_message(&c, MessageRole::User, &t, None, None, m) }).await?;
+        if conv.message_count == 0 {
+            let (c, title) = (conversation_id.clone(), content.chars().take(60).collect::<String>());
+            let _ = self.storage.call(move |s| s.conversations().set_title(&c, &title)).await;
+        }
+        let task = self
+            .create_task(TaskCreate { dot_id: conv.dot_id.clone(), prompt: content.clone(), kind: Some(TaskKind::Chat), conversation_id: Some(conversation_id.clone()), attachments, ..Default::default() })
+            .await?;
+        if meta.as_object().is_some_and(|m| !m.is_empty()) {
+            meta["task_id"] = json!(task.id);
+            let _ = self.storage.call({ let (m, c, meta) = (msg.id.clone(), content, meta); move |s| s.conversations().update_message_content(&m, &c, Some(meta)) }).await;
+        }
+        self.events.emit("message.changed", json!({ "conversation_id": conversation_id, "message_id": msg.id }));
+        let _ = self.emit_event(et::USER_MESSAGE, "user", json!({ "dot_id": conv.dot_id, "conversation_id": conversation_id, "task_id": task.id, "message_id": msg.id }), None, Some(format!("msg:{}", msg.id)), 0).await;
+        Ok((msg, task))
+    }
+
     pub async fn create_task(&self, input: TaskCreate) -> DotsResult<dots_core::Task> {
         self.create_task_with_depth(input, 0).await
     }

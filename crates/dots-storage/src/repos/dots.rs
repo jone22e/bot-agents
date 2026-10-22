@@ -1,6 +1,6 @@
 use dots_core::dot::{validate_name, validate_text};
 use dots_core::engine::validate_model;
-use dots_core::{Dot, DotCreate, DotLimits, DotRole, DotStatus, DotUpdate, DotWorkspace, DotsError, DotsResult, EngineKind, new_id};
+use dots_core::{Dot, DotCreate, DotLimits, DotRole, DotStatus, DotUpdate, DotWorkspace, DotsError, DotsResult, EngineKind, FlexiShare, FlexiShareUser, new_id};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::{parse_ts, ts};
@@ -12,24 +12,24 @@ pub struct DotsRepo<'a> {
 
 const SELECT_DOT: &str = "
     SELECT d.id, d.name, d.description, d.objective, d.status, d.limits_json, d.created_at, d.updated_at,
-           d.role,
+           d.role, d.flexi_share_json,
            (SELECT content FROM dot_instructions i WHERE i.dot_id = d.id ORDER BY version DESC LIMIT 1),
            (SELECT engine  FROM dot_engines e WHERE e.dot_id = d.id AND e.is_primary = 1),
            (SELECT path    FROM dot_workspaces w WHERE w.dot_id = d.id AND w.is_primary = 1),
            (SELECT config_json FROM dot_engines e WHERE e.dot_id = d.id AND e.is_primary = 1)
     FROM dots d";
 
-type DotRow = (String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+type DotRow = (String, String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>);
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DotRow> {
     Ok((
         r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
-        r.get(10)?, r.get(11)?, r.get(12)?,
+        r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?,
     ))
 }
 
 fn to_dot(row: DotRow) -> DotsResult<Dot> {
-    let (id, name, description, objective, status, limits, created_at, updated_at, role, instructions, engine, workspace, engine_config) = row;
+    let (id, name, description, objective, status, limits, created_at, updated_at, role, flexi_share, instructions, engine, workspace, engine_config) = row;
     let model = engine_config
         .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
         .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
@@ -45,9 +45,21 @@ fn to_dot(row: DotRow) -> DotsResult<Dot> {
         limits: serde_json::from_str(&limits).unwrap_or_default(),
         status: DotStatus::parse(&status)?,
         role: DotRole::parse(&role),
+        flexi_share: serde_json::from_str(&flexi_share).unwrap_or_default(),
         created_at: parse_ts(&created_at)?,
         updated_at: parse_ts(&updated_at)?,
     })
+}
+
+/// Lista de usuarios sem repetidos, nomes aparados; desligado => lista vazia.
+fn normalize_share(share: &FlexiShare) -> FlexiShare {
+    let mut seen = std::collections::HashSet::new();
+    let users = if share.enabled {
+        share.users.iter().filter(|u| u.id > 0 && seen.insert(u.id)).map(|u| FlexiShareUser { id: u.id, name: u.name.trim().to_string() }).collect()
+    } else {
+        vec![]
+    };
+    FlexiShare { enabled: share.enabled, users }
 }
 
 fn audit(tx: &Transaction<'_>, actor: &str, action: &str, dot_id: &str, details: serde_json::Value) -> DotsResult<()> {
@@ -251,9 +263,32 @@ impl<'a> DotsRepo<'a> {
                 changed.push("workspace_path");
             }
         }
+        if let Some(share) = &input.flexi_share {
+            if *share != current.flexi_share {
+                let share = normalize_share(share);
+                tx.execute("UPDATE dots SET flexi_share_json = ?1 WHERE id = ?2", params![serde_json::to_string(&share)?, id]).map_err(storage_err)?;
+                changed.push("flexi_share");
+            }
+        }
         audit(&tx, actor, "dot.update", id, serde_json::json!({ "fields": changed }))?;
         tx.commit().map_err(storage_err)?;
         fetch(self.conn, id)
+    }
+
+    /// Conversa unica que recebe as mensagens do Flexi web (ADR 0016); `None` enquanto ninguem falou pelo Flexi.
+    pub fn flexi_conversation(&self, dot_id: &str) -> DotsResult<Option<String>> {
+        self.conn
+            .query_row("SELECT flexi_conversation_id FROM dots WHERE id = ?1", params![dot_id], |r| r.get::<_, Option<String>>(0))
+            .optional()
+            .map_err(storage_err)?
+            .ok_or_else(|| DotsError::NotFound(format!("DOT {dot_id}")))
+    }
+
+    pub fn set_flexi_conversation(&mut self, dot_id: &str, conversation_id: Option<&str>) -> DotsResult<()> {
+        self.conn
+            .execute("UPDATE dots SET flexi_conversation_id = ?1 WHERE id = ?2", params![conversation_id, dot_id])
+            .map_err(storage_err)?;
+        Ok(())
     }
 
     pub fn set_status(&mut self, actor: &str, id: &str, status: DotStatus) -> DotsResult<Dot> {

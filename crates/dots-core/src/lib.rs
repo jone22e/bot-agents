@@ -31,7 +31,7 @@ pub use memory::{Memory, MemoryCreate, MemoryKind, MemoryUpdate};
 pub use notification::Notification;
 pub use policy::{Approval, ApprovalStatus, AutoApproveLevel, LearnedPermission, ToolPolicy, ToolPolicyUpdate, WorkspaceChange};
 pub use task::{Execution, ExecutionEvent, ExecutionEventRecord, ExecutionStatus, FailureKind, RiskLevel, Task, TaskCreate, TaskKind, TaskStatus};
-pub use dot::{Dot, DotCreate, DotLimits, DotStatus, DotUpdate, DotWorkspace};
+pub use dot::{Dot, DotCreate, DotLimits, DotStatus, DotUpdate, DotWorkspace, FlexiShare, FlexiShareUser};
 pub use engine::{AuthStatus, CliUpdateInfo, CliUpdates, EngineCapability, EngineConfiguration, EngineDetection, EngineKind, EngineModel, ProviderUsage, UsageInfo, UsageWindow};
 pub use error::{DotsError, DotsResult};
 pub use ids::new_id;

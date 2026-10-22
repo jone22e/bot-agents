@@ -12,7 +12,7 @@ mod dismissal;
 mod events;
 mod executor;
 mod flexi;
-mod flexi_link;
+mod flexi_sync;
 mod flexi_team;
 mod group;
 mod hiring;
@@ -259,7 +259,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         event_depths: std::sync::Mutex::new(std::collections::HashMap::new()),
         usage: crate::usage::UsageCache::default(),
         cli_updates: crate::cli_updates::UpdatesCache::default(),
-        flexi_link: crate::flexi_link::LinkState::default(),
+        flexi_link: crate::flexi_sync::LinkState::default(),
         browsers: crate::browser::BrowserPool::new(paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")), layout.browsers_dir.clone()),
         flexi: crate::flexi::FlexiRegistry::new(if std::env::var("DOTS_SECRETS").as_deref() == Ok("memory") {
             Arc::new(dots_flexi::MemoryStore::default())
@@ -302,7 +302,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
     tokio::spawn(schedules::run(service.clone()));
     tokio::spawn(autonomy::run(service.clone()));
     tokio::spawn(watcher::run(service.clone(), watch_rx, watcher.clone()));
-    tokio::spawn(flexi_link::run(service.clone()));
+    tokio::spawn(flexi_sync::run(service.clone()));
     service.refresh_watcher().await;
 
     // Deteccao inicial dos motores em segundo plano (nao bloqueia o IPC).

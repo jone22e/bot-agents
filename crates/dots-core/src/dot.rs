@@ -88,6 +88,25 @@ pub struct DotWorkspace {
     pub created_at: Timestamp,
 }
 
+/// Usuario do Flexi que pode conversar com um DOT compartilhado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FlexiShareUser {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub name: String,
+}
+
+/// Compartilhamento no Flexi web (ADR 0016): com `enabled`, o DOT aparece no Flexi para os `users` escolhidos,
+/// que conversam com ele numa conversa unica (tipo grupo). Sem `enabled`, o DOT e so do dono.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FlexiShare {
+    pub enabled: bool,
+    #[serde(default)]
+    pub users: Vec<FlexiShareUser>,
+}
+
 /// Identidade persistente de um trabalhador digital.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -106,6 +125,9 @@ pub struct Dot {
     pub limits: DotLimits,
     pub status: DotStatus,
     pub role: DotRole,
+    /// Quem pode falar com este DOT pelo Flexi web; desligado por padrao.
+    #[serde(default)]
+    pub flexi_share: FlexiShare,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -170,6 +192,10 @@ pub struct DotUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub role: Option<DotRole>,
+    /// Substitui o compartilhamento no Flexi inteiro (interruptor e lista de usuarios).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub flexi_share: Option<FlexiShare>,
 }
 
 pub const MAX_NAME_LEN: usize = 80;

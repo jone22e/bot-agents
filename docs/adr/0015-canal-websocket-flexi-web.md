@@ -1,6 +1,6 @@
 # ADR 0015: canal WebSocket persistente entre o runtime e o Flexi web
 
-Data: 2026-10-22. Estado: aceito.
+Data: 2026-10-22. Estado: substituido pela ADR 0016 (sincronizacao REST; o canal WebSocket foi removido em 2026-10-22).
 
 ## Contexto
 O Flexi web precisa mostrar, na coluna da direita, a Central de Aprovacoes e a Avaliacao de desempenho dos DOTs do
