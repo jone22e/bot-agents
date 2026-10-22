@@ -44,7 +44,7 @@ const sections: { id: Section; title: string; hint: string; icon: typeof Brain }
   { id: "gatilhos", title: "Gatilhos", hint: "Trabalhos automaticos por evento ou horario", icon: Zap },
   { id: "equipe", title: "Equipe", hint: "Quem ele gerencia e para quem trabalha", icon: Users },
   { id: "memoria", title: "Memoria", hint: "O que ele aprendeu e o que voce ensinou", icon: Brain },
-  { id: "aplicativos", title: "Aplicativos", hint: "Conexao com o Flexi", icon: Plug },
+  { id: "aplicativos", title: "Aplicativos", hint: "Conexao com o Flexi e compartilhamento", icon: Plug },
 ];
 const title = (s: Section) => sections.find((x) => x.id === s)!.title;
 

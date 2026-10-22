@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import ErrorBanner from "@/components/ErrorBanner.vue";
+import FlexiSharePanel from "@/components/FlexiSharePanel.vue";
 import { api, RuntimeError } from "@/api";
 import { ACCOUNT_CONNECTION, AGENTS_CONNECTION, useAppsStore } from "@/stores/apps";
 import { useSettingsStore } from "@/stores/settings";
 
 const props = defineProps<{ dotId: string }>();
+const dotId = props.dotId;
 const apps = useAppsStore();
 const settings = useSettingsStore();
 const current = ref<string | "">("");
@@ -48,5 +50,6 @@ async function save() {
         </div>
       </template>
     </section>
+    <FlexiSharePanel :dot-id="dotId" />
   </div>
 </template>
