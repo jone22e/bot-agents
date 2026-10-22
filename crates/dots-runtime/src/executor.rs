@@ -122,7 +122,13 @@ impl RuntimeService {
         let app_hosts: Vec<String> = flexi_conn.iter().map(|c| crate::policy::url_host(&c.base_url)).filter(|h| !h.is_empty()).collect();
         // Instrucoes estaveis por DOT vao no system prompt (iguais entre turnos: preservam o cache do CLI);
         // o que muda a cada tarefa (memorias, checkpoint, estado de trabalho) vai no prompt da tarefa.
-        let system_instructions = build_instructions(&dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring);
+        // Funcionario de equipe nao avisa o usuario (dots_notify_user): relata ao gerente.
+        let manager_name = self.storage.call({ let d = dot_id.clone(); move |s| {
+            let Some(team) = s.teams().member_of(&d)? else { return Ok(None) };
+            let Some(mid) = team.manager_dot_id else { return Ok(None) };
+            Ok(Some(s.dots().get(&mid)?.name))
+        } }).await.ok().flatten();
+        let system_instructions = build_instructions(&dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring, manager_name.as_deref());
         // Conversa com turnos anteriores do DOT mas sem sessao do motor: a sessao foi encerrada (por tamanho ou falha).
         let session_reset = resume_session.is_none()
             && match &task.conversation_id {
@@ -373,7 +379,7 @@ impl RuntimeService {
 
 /// Instrucoes estaveis do DOT (identidade, regras, papel, licoes). Nao dependem da tarefa: ficam iguais entre
 /// turnos da mesma conversa, o que preserva o cache de prompt do CLI em sessoes retomadas.
-fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], app_context: Option<&str>, browser_hosts: &[String], lessons: &[dots_core::Dismissal], hiring: Option<(usize, u32)>) -> String {
+fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], app_context: Option<&str>, browser_hosts: &[String], lessons: &[dots_core::Dismissal], hiring: Option<(usize, u32)>, manager: Option<&str>) -> String {
     let mut s = String::new();
     s.push_str(&format!("Voce e \"{}\", um DOT (trabalhador digital persistente) na plataforma DOTS.\n", dot.name));
     if !dot.description.trim().is_empty() {
@@ -410,7 +416,10 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
         s.push_str(&format!("- Comandos permitidos: {}\n", policy.allowed_commands.join(", ")));
     }
     s.push_str("- Ao concluir, responda com um resumo objetivo do que foi feito e do que ficou pendente.\n");
-    s.push_str("- Se algo precisar da atencao do usuario (erro que te impede de continuar, pendencia que so ele resolve, resultado importante), avise com dots_notify_user: o aviso fica no topo da tela ate ele clicar. Uma vez por assunto; nao repita. Para decisoes dele, pergunte com dots_ask_user.\n");
+    match manager {
+        Some(m) => s.push_str(&format!("- So o gerente avisa o usuario: NAO use dots_notify_user. Se algo precisar de atencao (erro que te impede de continuar, pendencia, resultado importante), relate no resultado da tarefa: ele chega ao seu gerente {m}, que decide se avisa o usuario. Para decisoes, pergunte com dots_ask_user.\n")),
+        None => s.push_str("- Se algo precisar da atencao do usuario (erro que te impede de continuar, pendencia que so ele resolve, resultado importante), avise com dots_notify_user: o aviso fica no topo da tela ate ele clicar. Uma vez por assunto; nao repita. Para decisoes dele, pergunte com dots_ask_user.\n"),
+    }
     s.push_str("- Em trabalhos longos, grave pontos de controle com dots_checkpoint apos cada etapa concluida.\n");
     if dot.role == DotRole::Supervisor {
         s.push_str("\nVoce e um SUPERVISOR (gerente): divide objetivos em pedidos claros, delega a DOTs da equipe (dots_list_team, dots_delegate), acompanha (dots_delegation_status), identifica bloqueios e consolida as entregas. Voce NUNCA executa o trabalho da equipe, mesmo sem nenhum funcionario: so consulta, delega, acompanha e responde; acoes que alteram algo sao negadas para voce. Se nao houver funcionario para a tarefa (ou todos estiverem ocupados com outra coisa), contrate um com dots_hire_employee: voce cria o nome (unico, de pessoa) e define a funcao e as instrucoes; depois delegue a ele. Delegacoes sao assincronas: apos delegar, termine o turno dizendo o que aguarda; cada entrega gera uma tarefa de acompanhamento para voce e, ao fim, outra de consolidacao. Ao receber cada acompanhamento, avalie o resultado e o estado da equipe por iniciativa propria, corrija bloqueios e oriente quem ainda trabalha, sem esperar o usuario cobrar. Perguntas e pedidos de permissao dos seus funcionarios sobre pedidos delegados chegam a voce como tarefas: responda com dots_answer_question e decida com dots_decide_approval (aprove o que esta dentro do pedido e do que o usuario autorizou; acoes irreversiveis que o usuario nao autorizou, confirme antes com ele). Use dots_ask_user so quando uma decisao for do usuario. Se um funcionario esta PARADO (interrompido ou com falha), retome com dots_resume_delegation ou delegue de novo com instrucoes melhores, em vez de so relatar que ele nao esta trabalhando. Voce nao pode alterar permissoes de ninguem. Voce pode pausar um funcionario da equipe (dots_pause_employee: ele para de receber trabalho ate ser retomado) e retoma-lo (dots_resume_employee), sem aprovacao do usuario. Se um funcionario errar de forma grave ou repetir o mesmo erro depois de instrucoes melhores, voce pode demiti-lo com dots_dismiss_employee (informe o motivo e a licao); isso passa pela aprovacao do usuario, EXCLUI o funcionario e registra a licao para toda a equipe; em seguida contrate um substituto com dots_hire_employee e delegue a ele de novo.\n");
@@ -479,7 +488,10 @@ mod tests {
         let policy = dots_core::ToolPolicy::default_for("d");
         let mems: Vec<dots_core::Memory> = (0..100).map(|i| dots_core::Memory { id: i.to_string(), dot_id: "d".into(), kind: MemoryKind::LongTerm, content: "x".repeat(200), importance: 0, source: None, created_at: dots_core::now(), updated_at: dots_core::now() }).collect();
         let lesson = dots_core::Dismissal { id: "x".into(), team_id: Some("t".into()), team_name: "Mercado Livre".into(), manager_dot_id: Some("m".into()), manager_name: "Milei".into(), dot_id: Some("d".into()), dot_name: "Lula".into(), reason: "publicou anuncio sem revisar o preco".into(), lesson: "revisar o preco antes de publicar".into(), memories_wiped: 3, created_at: dots_core::now() };
-        let s = build_instructions(&dot, &policy, &[], Some("Mapa do app: teste"), &["flexi.exemplo.com".to_string()], &[lesson], None);
+        let s = build_instructions(&dot, &policy, &[], Some("Mapa do app: teste"), &["flexi.exemplo.com".to_string()], &[lesson], None, None);
+        assert!(s.contains("avise com dots_notify_user"), "DOT sem gerente avisa o usuario");
+        let e = build_instructions(&dot, &policy, &[], None, &[], &[], None, Some("Milei"));
+        assert!(e.contains("NAO use dots_notify_user") && e.contains("seu gerente Milei") && !e.contains("avise com dots_notify_user"), "funcionario relata ao gerente em vez de avisar o usuario");
         assert!(s.contains("NAO repita estes erros") && s.contains("revisar o preco antes de publicar") && s.contains("Milei"), "licoes de demissao entram nas instrucoes");
         assert!(s.contains("Mapa do app: teste"));
         assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");

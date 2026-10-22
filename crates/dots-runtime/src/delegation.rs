@@ -173,16 +173,32 @@ impl RuntimeService {
     }
 
     /// `dots_notify_user`: grava um aviso para o usuario; fica na tela ate ele clicar. Nao bloqueia.
+    /// So o gerente (ou um DOT sem equipe) avisa o usuario: funcionario relata ao seu gerente.
     pub async fn notify_user(&self, ctx: &SharedContext, title: &str, detail: &str, action: &str) -> DotsResult<ToolOutput> {
         let title: String = title.trim().chars().take(120).collect();
         if title.is_empty() {
             return Ok(ToolOutput::err("informe title: o que aconteceu, em uma frase curta".into()));
         }
         let (did, tid) = (ctx.dot_id.clone(), ctx.task_id.clone());
+        if let Some(manager) = self.manager_name_of(&did).await? {
+            return Ok(ToolOutput::err(format!(
+                "so o gerente avisa o usuario. Voce e funcionario de {manager}: relate a pendencia no resultado da tarefa (ela chega ao seu gerente) ou, se precisar de uma decisao, pergunte com dots_ask_user. Nao repita este aviso."
+            )));
+        }
         let (detail, action): (String, String) = (detail.trim().chars().take(200).collect(), action.trim().chars().take(30).collect());
         let n = self.storage.call(move |st| st.notifications().create(&did, Some(&tid), &title, &detail, &action)).await?;
         self.events.emit("notification.changed", json!({ "id": n.id, "dot_id": n.dot_id, "status": n.status }));
         Ok(ToolOutput::ok(format!("aviso enviado ao usuario ({}): {}. Ele fica na tela ate o usuario clicar; nao repita.", n.id, n.title)))
+    }
+
+    /// Nome do gerente da equipe da qual o DOT e funcionario (`None` para gerente ou DOT sem equipe).
+    async fn manager_name_of(&self, dot_id: &str) -> DotsResult<Option<String>> {
+        let d = dot_id.to_string();
+        self.storage.call(move |st| {
+            let Some(team) = st.teams().member_of(&d)? else { return Ok(None) };
+            let Some(mid) = team.manager_dot_id else { return Ok(None) };
+            Ok(Some(st.dots().get(&mid)?.name))
+        }).await
     }
 
     /// `dots_ask_user`: registra a pergunta; a resposta volta numa tarefa de continuacao.
