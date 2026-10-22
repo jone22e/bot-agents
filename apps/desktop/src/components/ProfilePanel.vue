@@ -17,7 +17,8 @@ import { useContactsStore } from "@/stores/contacts";
 import { useDotsStore } from "@/stores/dots";
 import { useTeamsStore } from "@/stores/teams";
 
-const props = defineProps<{ dot: Dot }>();
+/** `section` inicial: o menu rapido abre direto em Sobre ou Gatilhos. */
+const props = defineProps<{ dot: Dot; section?: "sobre" | "gatilhos" | null }>();
 const emit = defineEmits<{ close: []; deleted: [] }>();
 const dots = useDotsStore();
 const contacts = useContactsStore();
@@ -34,7 +35,7 @@ const subtitle = computed(() => [
 ].filter(Boolean).join(" · "));
 type Section = "sobre" | "permissoes" | "gatilhos" | "equipe" | "memoria" | "aplicativos";
 /** null = menu de secoes. */
-const section = ref<Section | null>(null);
+const section = ref<Section | null>(props.section ?? null);
 const saving = ref(false);
 const confirmDelete = ref(false);
 const sections: { id: Section; title: string; hint: string; icon: typeof Brain }[] = [

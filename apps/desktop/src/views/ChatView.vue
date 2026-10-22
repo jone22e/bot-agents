@@ -9,6 +9,7 @@ import { ArrowUp, Check, FileText, ImageIcon, List, Mic, Monitor, Paperclip, Squ
 import Avatar from "@/components/Avatar.vue";
 import ChatBubble from "@/components/ChatBubble.vue";
 import ComputerPanel from "@/components/ComputerPanel.vue";
+import DotQuickMenu, { type ProfileSection } from "@/components/DotQuickMenu.vue";
 import ProfilePanel from "@/components/ProfilePanel.vue";
 import RequestCard from "@/components/RequestCard.vue";
 import ToolGroup from "@/components/ToolGroup.vue";
@@ -18,6 +19,7 @@ import { toolName } from "@/lib/humanize";
 import { md, onMdClick } from "@/lib/markdown";
 import { modelLabel } from "@/lib/models";
 import { useApprovalsStore } from "@/stores/approvals";
+import { useAutomationStore } from "@/stores/automation";
 import { useChatStore } from "@/stores/chat";
 import { useContactsStore } from "@/stores/contacts";
 import { useDotsStore } from "@/stores/dots";
@@ -31,9 +33,14 @@ const contacts = useContactsStore();
 const dots = useDotsStore();
 const engines = useEnginesStore();
 const approvals = useApprovalsStore();
+const automation = useAutomationStore();
 const runtime = useRuntimeStore();
 const draft = ref("");
 const showProfile = ref(false);
+/** Secao em que o perfil abre quando vem do menu rapido. */
+const profileSection = ref<ProfileSection>(null);
+/** Menu rapido do DOT (clique no nome no topo); o perfil completo so abre a partir dele. */
+const showMenu = ref(false);
 const showComputer = ref(false);
 const thread = ref<HTMLElement | null>(null);
 const box = ref<HTMLTextAreaElement | null>(null);
@@ -82,6 +89,7 @@ async function load() {
 onMounted(load);
 watch(dotId, () => {
   showProfile.value = false;
+  showMenu.value = false;
   showComputer.value = false;
   clearComposer();
   load();
@@ -270,6 +278,26 @@ async function startWork() {
   await contacts.load();
   scrollToEnd(true);
 }
+/** Menu rapido: abre o perfil (na secao pedida) e fecha o Computador. */
+function openProfile(section: ProfileSection) {
+  showMenu.value = false;
+  profileSection.value = section;
+  showProfile.value = true;
+  showComputer.value = false;
+}
+/** "Executar agora" do menu rapido: roda ja o pedido do agendamento ativo; sem agendamento, pede que siga o objetivo. */
+async function runNow() {
+  showMenu.value = false;
+  if (!dot.value || chat.busy || chat.sending) return;
+  const sched = automation.dotId === dot.value.id ? automation.schedules.find((s) => s.enabled) : undefined;
+  if (sched) {
+    await api.tasks.create({ dot_id: dot.value.id, prompt: sched.prompt, title: "Rodada pedida por voce", conversation_id: chat.conversationId, attachments: [], delegation_chain: [] });
+  } else {
+    await chat.send(START_MESSAGE);
+  }
+  await contacts.load();
+  scrollToEnd(true);
+}
 /** "Reenviar mensagem" no cartao de erro: a ultima mensagem sua, com os mesmos anexos */
 async function resend() {
   const m = [...chat.messages].reverse().find((x) => x.role === "user");
@@ -300,11 +328,12 @@ function autosize() {
       </div>
       <template v-else>
         <header class="relative flex items-center justify-center py-3" data-tauri-drag-region>
-          <button class="flex items-center gap-2 rounded-full bg-zinc-800/90 px-3 py-1.5 text-sm font-medium text-zinc-100 hover:bg-zinc-700" @click="showProfile = !showProfile; if (showProfile) showComputer = false">
+          <button class="flex items-center gap-2 rounded-full bg-zinc-800/90 px-3 py-1.5 text-sm font-medium text-zinc-100 hover:bg-zinc-700" :class="showMenu ? 'ring-1 ring-violet-500/60' : ''" aria-haspopup="menu" :aria-expanded="showMenu" @mousedown.stop @click="showMenu = !showMenu">
             <Avatar :name="dot.name" :seed="dot.id" size="sm" :state="contacts.byDot(dot.id)?.state" />
             {{ dot.name }}
             <span v-if="dotModel" class="font-normal text-zinc-400">· {{ dotModel }}</span>
           </button>
+          <DotQuickMenu v-if="showMenu" :dot="dot" :busy="chat.busy || chat.sending" @close="showMenu = false" @run="runNow" @profile="openProfile" />
           <button class="absolute right-4 flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" :class="showComputer ? 'bg-zinc-800 text-zinc-100' : ''" :title="`Computador de ${dot.name}`" @click="showComputer = !showComputer; if (showComputer) showProfile = false"><Monitor :size="18" /></button>
         </header>
         <p v-if="chat.error" class="mx-auto mb-2 rounded-md bg-red-950/40 px-3 py-1 text-xs text-red-200">{{ chat.error }}</p>
@@ -403,7 +432,7 @@ function autosize() {
         </footer>
       </template>
     </div>
-    <ProfilePanel v-if="dot && showProfile" :dot="dot" @close="showProfile = false" @deleted="showProfile = false; router.replace('/')" />
+    <ProfilePanel v-if="dot && showProfile" :key="profileSection ?? 'menu'" :dot="dot" :section="profileSection" @close="showProfile = false" @deleted="showProfile = false; router.replace('/')" />
     <ComputerPanel v-if="dot && showComputer" :dot="dot" @close="showComputer = false" />
 
     <!-- imagem anexada em tamanho maior: clique fora ou Esc fecha -->
