@@ -1,0 +1,6 @@
+{
+  "bundle": {
+    "targets": ["deb"],
+    "externalBin": ["binaries/dotsd"]
+  }
+}
