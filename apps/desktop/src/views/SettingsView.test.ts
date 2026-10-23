@@ -14,7 +14,7 @@ import { useUsageStore } from "@/stores/usage";
 describe("trabalhos simultâneos", () => {
   beforeEach(() => setActivePinia(createPinia()));
 
-  it("mostra o novo padrão e salva o limite sem reiniciar trabalhos ativos", async () => {
+  it("aceita mais de oito trabalhos simultâneos sem reiniciar trabalhos ativos", async () => {
     const runtime = useRuntimeStore();
     runtime.connection = "connected";
     runtime.refresh = vi.fn();
@@ -28,12 +28,12 @@ describe("trabalhos simultâneos", () => {
     const wrapper = mount(SettingsView, {
       global: { stubs: { PageHeader: true, Toggle: true, EngineCard: true, ErrorBanner: true } },
     });
-    const input = wrapper.find('input[type="number"][max="8"]');
+    const input = wrapper.find('input[type="number"][min="1"]:not([max])');
     expect((input.element as HTMLInputElement).value).toBe("4");
 
-    await input.setValue("6");
+    await input.setValue("12");
     await flushPromises();
-    expect(settings.set).toHaveBeenCalledWith("runtime.max_concurrent_executions", 6);
+    expect(settings.set).toHaveBeenCalledWith("runtime.max_concurrent_executions", 12);
     expect(wrapper.text()).toContain("Reinicie em Serviço em segundo plano");
     expect(runtime.restart).not.toHaveBeenCalled();
     wrapper.unmount();

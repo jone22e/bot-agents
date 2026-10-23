@@ -66,7 +66,7 @@ const concurrencyError = ref<string | null>(null);
 const concurrencyRestartNeeded = ref(false);
 async function setMaxConcurrent(el: HTMLInputElement) {
   const n = Number(el.value);
-  if (!Number.isInteger(n) || n < 1 || n > 8) { el.value = String(maxConcurrent.value); return; }
+  if (!Number.isSafeInteger(n) || n < 1) { el.value = String(maxConcurrent.value); return; }
   if (n === maxConcurrent.value) return;
   try {
     await settings.set(MAX_CONCURRENT, n);
@@ -118,7 +118,7 @@ async function pickTheme(id: string) {
                 <span class="block text-sm text-zinc-200">Trabalhos simultâneos</span>
                 <span class="block text-xs text-zinc-500">Quantas tarefas podem ser executadas ao mesmo tempo, somando todos os DOTs. Padrão: 4.</span>
               </span>
-              <input type="number" min="1" max="8" step="1" class="input w-20 text-center" :value="maxConcurrent" :disabled="!runtime.isConnected" @change="(e) => setMaxConcurrent(e.target as HTMLInputElement)" />
+              <input type="number" min="1" step="1" class="input w-20 text-center" :value="maxConcurrent" :disabled="!runtime.isConnected" @change="(e) => setMaxConcurrent(e.target as HTMLInputElement)" />
             </label>
             <p v-if="concurrencyRestartNeeded" class="text-xs text-amber-300">Limite salvo. Reinicie em Serviço em segundo plano quando os trabalhos atuais terminarem para aplicar.</p>
             <ErrorBanner :message="concurrencyError" />
