@@ -84,7 +84,16 @@ pub struct InboxMessage {
     #[serde(default)]
     pub conteudo: String,
     #[serde(default)]
+    pub imagem: Option<InboxImage>,
+    #[serde(default)]
     pub estado: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct InboxImage {
+    pub nome: String,
+    pub mime: String,
+    pub dados: String,
 }
 
 /// Decisao de aprovacao tomada no Flexi web, ainda nao aplicada aqui.
@@ -189,7 +198,12 @@ impl From<DotsError> for SyncError {
 pub fn prompt_for(msg: &InboxMessage) -> String {
     let autor = msg.autor_nome.trim();
     let autor = if autor.is_empty() { "Usuario do Flexi" } else { autor };
-    format!("{autor} (pelo Flexi): {}", msg.conteudo.trim())
+    let conteudo = msg.conteudo.trim();
+    if conteudo.is_empty() && msg.imagem.is_some() {
+        format!("{autor} (pelo Flexi): imagem anexada")
+    } else {
+        format!("{autor} (pelo Flexi): {conteudo}")
+    }
 }
 
 /// Usuarios do Flexi que veem o DOT: os dele, com "Compartilhar no Flexi" ligado; senao, os do gerente da equipe
@@ -592,7 +606,13 @@ async fn start_message(svc: &RuntimeService, client: &FlexiClient, st: &mut Sync
     };
     let cid = svc.flexi_conversation_for(&dot.id).await?;
     let meta = json!({ "flexi": { "mensagem_id": msg.id, "usuario_id": msg.usuario_id, "autor_nome": msg.autor_nome } });
-    let (_, task) = svc.send_conversation_message(&cid, prompt_for(msg), vec![], meta).await?;
+    let attachments = if let Some(imagem) = &msg.imagem {
+        let saved = svc.dispatch("conversations.attach", json!({ "conversation_id": cid, "name": imagem.nome, "data": imagem.dados })).await?;
+        vec![saved.get("path").and_then(Value::as_str).ok_or_else(|| SyncError::Failed("anexo sem caminho".into()))?.to_string()]
+    } else {
+        vec![]
+    };
+    let (_, task) = svc.send_conversation_message(&cid, prompt_for(msg), attachments, meta).await?;
     client.call("POST", &path(&format!("/mensagens/{}/estado", msg.id)), None, Some(&json!({ "estado": "processando" }))).await?;
     st.inflight.insert(msg.id, InFlight { task_id: task.id, conversation_id: cid, agente_id: dot.id, last_pushed: None });
     Ok(())
@@ -941,13 +961,16 @@ mod tests {
     use super::*;
 
     fn msg(autor: &str, texto: &str) -> InboxMessage {
-        InboxMessage { id: 7, agente_id: "dot-1".into(), usuario_id: Some(3), autor_nome: autor.into(), conteudo: texto.into(), estado: "enviada".into() }
+        InboxMessage { id: 7, agente_id: "dot-1".into(), usuario_id: Some(3), autor_nome: autor.into(), conteudo: texto.into(), imagem: None, estado: "enviada".into() }
     }
 
     #[test]
     fn prompt_identifica_quem_falou() {
         assert_eq!(prompt_for(&msg("Maria Silva", "  qual o estoque do MLB1?  ")), "Maria Silva (pelo Flexi): qual o estoque do MLB1?");
         assert_eq!(prompt_for(&msg("  ", "oi")), "Usuario do Flexi (pelo Flexi): oi");
+        let mut com_imagem = msg("Maria Silva", "");
+        com_imagem.imagem = Some(InboxImage { nome: "foto.png".into(), mime: "image/png".into(), dados: "YWJj".into() });
+        assert_eq!(prompt_for(&com_imagem), "Maria Silva (pelo Flexi): imagem anexada");
     }
 
     #[test]
@@ -993,7 +1016,7 @@ mod tests {
     #[test]
     fn interpreta_resposta_da_sincronizacao() {
         let r: SyncResponse = serde_json::from_value(json!({
-            "mensagens": [{ "id": 1, "agente_id": "d", "usuario_id": 9, "autor_nome": "Ana", "conteudo": "oi", "estado": "enviada" }],
+            "mensagens": [{ "id": 1, "agente_id": "d", "usuario_id": 9, "autor_nome": "Ana", "conteudo": "oi", "imagem": { "nome": "foto.png", "mime": "image/png", "dados": "YWJj" }, "estado": "enviada" }],
             "decisoes": [{ "id": "ap-1", "aprovado": false, "motivo": "nao agora" }],
             "dispensadas": ["n-1"],
             "comandos": [{ "id": 5, "agente_id": "d", "tipo": "definir_modelo", "dados": { "modelo": "gpt-5.6-terra" } }, { "id": 6, "agente_id": "d", "tipo": "pausar" }]
@@ -1001,6 +1024,7 @@ mod tests {
         .unwrap();
         assert_eq!(r.mensagens.len(), 1);
         assert_eq!(r.mensagens[0].autor_nome, "Ana");
+        assert_eq!(r.mensagens[0].imagem.as_ref().map(|i| (i.nome.as_str(), i.mime.as_str(), i.dados.as_str())), Some(("foto.png", "image/png", "YWJj")));
         assert_eq!(r.decisoes[0], Decision { id: "ap-1".into(), aprovado: false, motivo: Some("nao agora".into()) });
         assert_eq!(r.dispensadas, vec!["n-1".to_string()]);
         assert_eq!(r.comandos[0], Command { id: 5, agente_id: "d".into(), tipo: "definir_modelo".into(), dados: json!({ "modelo": "gpt-5.6-terra" }) });
