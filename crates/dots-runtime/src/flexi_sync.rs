@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dots_core::{AppConnection, Dot, DotStatus, DotsError, DotsResult, MessageRole, TaskStatus, Timestamp};
+use dots_core::{AppConnection, Contact, Dot, DotStatus, DotsError, DotsResult, MessageRole, TaskStatus, Team, Timestamp};
 use dots_flexi::{FlexiClient, FlexiError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,6 +33,8 @@ const CONVERSATION_SCAN: u32 = 200;
 /// Evento interno (IPC `apps.flexi.link_reconnect`): sincroniza na hora.
 pub const RECONNECT_EVENT: &str = "flexi_link.reconnect";
 const REGISTRY_EVENTS: [&str; 2] = ["dots.changed", "teams.changed"];
+/// Ordem das equipes escolhida pelo usuario (mesma chave da lista de contatos do app): muda o agrupamento no Flexi.
+const TEAMS_ORDER_SETTING: &str = "ui.teams_order";
 const APPROVAL_EVENTS: [&str; 2] = ["approval.requested", "approval.resolved"];
 
 /// Estado da sincronizacao, em memoria, para a interface do app (`apps.flexi.link_status`).
@@ -105,6 +107,8 @@ struct SyncState {
     approvals_dirty: bool,
     perf_dirty: bool,
     last_perf_push: Option<tokio::time::Instant>,
+    /// Ultimo JSON de `estados` aceito pelo Flexi: so manda de novo quando algo mudou.
+    last_states: Option<String>,
     inflight: HashMap<i64, InFlight>,
 }
 
@@ -144,6 +148,43 @@ pub fn agent_payload(dot: &Dot) -> Value {
         "status": dot.status.as_str(),
         "usuarios": dot.flexi_share.users.iter().map(|u| u.id).collect::<Vec<_>>(),
     })
+}
+
+/// Estado de um DOT compartilhado como a lista de contatos do app o mostra (`contacts.list`), para o Flexi
+/// desenhar a mesma linha: situacao (idle | busy | attention), texto, cargo, batimento, concluido e pedidos pendentes.
+pub fn state_payload(c: &Contact) -> Value {
+    json!({
+        "id": c.dot.id,
+        "status": c.dot.status.as_str(),
+        "situacao": c.state,
+        "texto": c.state_text,
+        "cargo": c.title,
+        "pulso": c.pulse,
+        "concluido": c.done,
+        "pendentes": c.pending_requests,
+        "ultima_atividade_em": c.last_at,
+    })
+}
+
+/// Equipes na ordem escolhida pelo usuario (`ui.teams_order`), como a lista de contatos do app agrupa os DOTs.
+/// `pai` e a equipe da qual o gerente desta e funcionario (subtitulo "em X" no app).
+pub fn teams_payload(teams: &[Team], order: &[String]) -> Vec<Value> {
+    let rank: HashMap<&str, usize> = order.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
+    let mut sorted: Vec<(usize, &Team)> = teams.iter().enumerate().map(|(i, t)| (rank.get(t.id.as_str()).copied().unwrap_or(order.len() + i), t)).collect();
+    sorted.sort_by_key(|(k, _)| *k);
+    sorted
+        .into_iter()
+        .map(|(_, t)| {
+            let parent = t.manager_dot_id.as_deref().and_then(|m| teams.iter().find(|p| p.member_ids.iter().any(|id| id == m)));
+            json!({
+                "id": t.id,
+                "nome": t.name,
+                "gerente_id": t.manager_dot_id,
+                "membros": t.member_ids,
+                "pai": parent.map(|p| p.name.clone()),
+            })
+        })
+        .collect()
 }
 
 /// Estado da resposta do DOT a partir dos metadados da mensagem dele: `(estado, terminou)`.
@@ -233,6 +274,27 @@ impl RuntimeService {
         Ok(self.storage.call(|s| s.dots().list(false)).await?.into_iter().filter(|d| d.flexi_share.enabled && d.status != DotStatus::Archived).collect())
     }
 
+    /// Estado atual dos DOTs compartilhados, na mesma forma da lista de contatos do app.
+    async fn flexi_shared_states(&self) -> DotsResult<Vec<Value>> {
+        let contacts: Vec<Contact> = serde_json::from_value(self.dispatch("contacts.list", json!({})).await?).map_err(|e| DotsError::Internal(format!("contatos invalidos: {e}")))?;
+        Ok(contacts.iter().filter(|c| c.dot.flexi_share.enabled && c.dot.status != DotStatus::Archived).map(state_payload).collect())
+    }
+
+    /// Equipes do app, na ordem escolhida pelo usuario, para o Flexi agrupar os DOTs como a lista de contatos.
+    async fn flexi_teams(&self) -> DotsResult<Vec<Value>> {
+        self.storage
+            .call(|s| {
+                let teams = s.teams().list()?;
+                let order: Vec<String> = s
+                    .settings()
+                    .get(TEAMS_ORDER_SETTING)?
+                    .and_then(|st| st.value.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()))
+                    .unwrap_or_default();
+                Ok(teams_payload(&teams, &order))
+            })
+            .await
+    }
+
     /// Conversa unica do DOT com o Flexi; cria na primeira mensagem.
     async fn flexi_conversation_for(&self, dot_id: &str) -> DotsResult<String> {
         let d = dot_id.to_string();
@@ -285,9 +347,10 @@ impl RuntimeService {
 
 async fn register_agents(svc: &RuntimeService, client: &FlexiClient) -> Result<(), SyncError> {
     let dots = svc.flexi_shared_dots().await?;
-    let body = json!({ "versao": crate::VERSION, "agentes": dots.iter().map(agent_payload).collect::<Vec<_>>() });
+    let equipes = svc.flexi_teams().await?;
+    let body = json!({ "versao": crate::VERSION, "agentes": dots.iter().map(agent_payload).collect::<Vec<_>>(), "equipes": equipes });
     client.call("PUT", &path("/agentes"), None, Some(&body)).await?;
-    tracing::debug!(agentes = dots.len(), "DOTs compartilhados registrados no Flexi");
+    tracing::debug!(agentes = dots.len(), equipes = equipes.len(), "DOTs compartilhados registrados no Flexi");
     Ok(())
 }
 
@@ -372,6 +435,13 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
 
     let (pending, dots) = svc.flexi_sync_counts().await?;
     let mut body = json!({ "versao": crate::VERSION, "pendentes": pending, "dots": dots });
+    // Estado de cada DOT compartilhado (a linha da lista de contatos): so quando mudou desde o ultimo aceite.
+    let states = svc.flexi_shared_states().await?;
+    let states_json = serde_json::to_string(&states).unwrap_or_default();
+    let states_due = !st.started || st.last_states.as_deref() != Some(states_json.as_str());
+    if states_due {
+        body["estados"] = Value::Array(states);
+    }
     if !st.started || st.approvals_dirty {
         let approvals = svc.storage.call(|s| s.approvals().list(false, APPROVALS_LIMIT)).await?;
         body["aprovacoes"] = json!(approvals);
@@ -387,6 +457,9 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
     // So depois do aceite: um erro de rede deixa os dados para a proxima rodada.
     st.started = true;
     st.approvals_dirty = false;
+    if states_due {
+        st.last_states = Some(states_json);
+    }
     if perf_due {
         st.perf_dirty = false;
         st.last_perf_push = Some(tokio::time::Instant::now());
@@ -439,6 +512,7 @@ async fn wait_tick(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::
             ev = rx.recv() => match ev {
                 Ok(ev) if ev.event == RECONNECT_EVENT || ev.event == "apps.changed" => return,
                 Ok(ev) if REGISTRY_EVENTS.contains(&ev.event.as_str()) => { st.registry_dirty = true; return }
+                Ok(ev) if ev.event == "settings.changed" && ev.payload.get("key").and_then(Value::as_str) == Some(TEAMS_ORDER_SETTING) => { st.registry_dirty = true; return }
                 Ok(ev) if APPROVAL_EVENTS.contains(&ev.event.as_str()) => { st.approvals_dirty = true; return }
                 Ok(ev) if ev.event == "task.changed" => {
                     let id = ev.payload.get("id").and_then(Value::as_str).unwrap_or("");
@@ -559,6 +633,28 @@ mod tests {
         assert_eq!(r.decisoes[0], Decision { id: "ap-1".into(), aprovado: false, motivo: Some("nao agora".into()) });
         let vazio: SyncResponse = serde_json::from_value(json!({ "status": 1 })).unwrap();
         assert!(vazio.mensagens.is_empty() && vazio.decisoes.is_empty());
+    }
+
+    #[test]
+    fn equipes_seguem_a_ordem_do_usuario_e_apontam_a_equipe_pai() {
+        let t = |id: &str, name: &str, manager: Option<&str>, members: &[&str]| Team {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            manager_dot_id: manager.map(String::from),
+            member_ids: members.iter().map(|m| m.to_string()).collect(),
+            created_at: dots_core::now(),
+            updated_at: dots_core::now(),
+        };
+        let teams = vec![t("eq-a", "Marketing", Some("ger-a"), &["f-1"]), t("eq-b", "Ads", Some("ger-b"), &["ger-a"]), t("eq-c", "Sem dono", None, &["f-2"])];
+        let out = teams_payload(&teams, &["eq-c".to_string(), "eq-a".to_string()]);
+        assert_eq!(out.iter().map(|v| v["id"].as_str().unwrap()).collect::<Vec<_>>(), vec!["eq-c", "eq-a", "eq-b"]);
+        let a = out.iter().find(|v| v["id"] == "eq-a").unwrap();
+        assert_eq!(a["pai"], json!("Ads"));
+        assert_eq!(a["gerente_id"], json!("ger-a"));
+        assert_eq!(a["membros"], json!(["f-1"]));
+        assert_eq!(out[0]["pai"], Value::Null);
+        assert_eq!(out[0]["gerente_id"], Value::Null);
     }
 
     #[test]

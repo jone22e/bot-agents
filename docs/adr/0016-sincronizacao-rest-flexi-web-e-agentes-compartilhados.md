@@ -22,11 +22,16 @@ interruptor "Compartilhar no Flexi" e a lista de usuarios ficam no perfil do DOT
 `GET /api/usuarios` pelo IPC `apps.flexi.users`.
 
 Tarefa de fundo `flexi_sync::run` (substitui `flexi_link`):
-- `PUT /app/agentes` no inicio e em `dots.changed`/`teams.changed`: lista dos DOTs compartilhados (id, nome, descricao,
-  status, usuarios). O Flexi desativa (`ativo = 0`) o que saiu da lista.
-- `POST /app/sincronizar` a cada 4 s (ou na hora, por evento): `{versao, pendentes, dots, aprovacoes?, desempenho?}`.
-  Aprovacoes vao quando mudam (`approval.requested|resolved`); desempenho (7 e 30 dias) a cada 5 min ou 60 s depois de
-  uma tarefa terminar. A resposta traz `mensagens` (de usuarios, em `enviada`/`processando`) e `decisoes` (aprovacoes
+- `PUT /app/agentes` no inicio e em `dots.changed`/`teams.changed` (e quando o usuario reordena as equipes,
+  `settings.changed` de `ui.teams_order`): lista dos DOTs compartilhados (id, nome, descricao, status, usuarios) e
+  `equipes` (id, nome, gerente_id, membros, pai, na ordem do usuario) para o Flexi agrupar como a lista de contatos.
+  O Flexi desativa (`ativo = 0`) o que saiu da lista.
+- `POST /app/sincronizar` a cada 4 s (ou na hora, por evento): `{versao, pendentes, dots, estados?, aprovacoes?,
+  desempenho?}`. `estados` e a linha de cada DOT compartilhado na lista de contatos (`contacts.list`: situacao, texto,
+  cargo, pulso, concluido, pendentes, ultima_atividade_em) e so vai quando mudou desde o ultimo aceite; o Flexi guarda
+  em `agentes_dots_agentes.estado` e desenha a mesma linha (anel do avatar, batimento, cargo, equipes) no painel web
+  (2026-10-23). Aprovacoes vao quando mudam (`approval.requested|resolved`); desempenho (7 e 30 dias) a cada 5 min ou
+  60 s depois de uma tarefa terminar. A resposta traz `mensagens` (de usuarios, em `enviada`/`processando`) e `decisoes` (aprovacoes
   decididas no Flexi web ainda nao aplicadas).
 - Cada mensagem nova vira uma mensagem do usuario na conversa unica "Flexi" do DOT (`send_conversation_message`, mesmo
   caminho do IPC `conversations.send`), com o texto `"<nome> (pelo Flexi): <mensagem>"` e metadados
