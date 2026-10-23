@@ -32,20 +32,39 @@ pub struct BrowserBinary {
 
 /// Candidatos em ordem de preferencia: Chrome instalado, Chromium do cache do Playwright, outros Chromium.
 pub fn candidates(home: &Path) -> Vec<BrowserBinary> {
-    let mut out = vec![
+    let mut out = Vec::new();
+    #[cfg(target_os = "macos")]
+    out.extend([
         BrowserBinary { path: PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"), label: "Google Chrome".into() },
         BrowserBinary { path: home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome"), label: "Google Chrome".into() },
-    ];
+    ]);
+    #[cfg(target_os = "linux")]
+    out.extend([
+        ("/usr/bin/google-chrome-stable", "Google Chrome"),
+        ("/usr/bin/google-chrome", "Google Chrome"),
+        ("/opt/google/chrome/chrome", "Google Chrome"),
+        ("/usr/bin/chromium", "Chromium"),
+        ("/usr/bin/chromium-browser", "Chromium"),
+        ("/snap/bin/chromium", "Chromium"),
+        ("/usr/bin/brave-browser", "Brave"),
+        ("/usr/bin/microsoft-edge", "Microsoft Edge"),
+    ].map(|(path, label)| BrowserBinary { path: PathBuf::from(path), label: label.into() }));
     out.extend(playwright_chromium(home));
-    out.push(BrowserBinary { path: PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"), label: "Chromium".into() });
-    out.push(BrowserBinary { path: PathBuf::from("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"), label: "Brave".into() });
-    out.push(BrowserBinary { path: PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"), label: "Microsoft Edge".into() });
+    #[cfg(target_os = "macos")]
+    {
+        out.push(BrowserBinary { path: PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"), label: "Chromium".into() });
+        out.push(BrowserBinary { path: PathBuf::from("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"), label: "Brave".into() });
+        out.push(BrowserBinary { path: PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"), label: "Microsoft Edge".into() });
+    }
     out
 }
 
-/// Chromium baixado pelo Playwright (`~/Library/Caches/ms-playwright/chromium-<n>/...`), o mais novo primeiro.
+/// Chromium baixado pelo Playwright, o mais novo primeiro.
 fn playwright_chromium(home: &Path) -> Vec<BrowserBinary> {
+    #[cfg(target_os = "macos")]
     let base = home.join("Library/Caches/ms-playwright");
+    #[cfg(target_os = "linux")]
+    let base = home.join(".cache/ms-playwright");
     let Ok(rd) = std::fs::read_dir(&base) else { return vec![] };
     let mut builds: Vec<(u64, PathBuf)> = rd
         .flatten()
@@ -59,11 +78,11 @@ fn playwright_chromium(home: &Path) -> Vec<BrowserBinary> {
     builds
         .into_iter()
         .flat_map(|(n, dir)| {
-            [
-                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-                "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-                "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
-            ]
+            #[cfg(target_os = "macos")]
+            let paths = ["chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing", "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing", "chrome-mac/Chromium.app/Contents/MacOS/Chromium"];
+            #[cfg(target_os = "linux")]
+            let paths = ["chrome-linux/chrome", "chrome-linux64/chrome"];
+            paths
             .into_iter()
             .map(move |rel| BrowserBinary { path: dir.join(rel), label: format!("Chromium (Playwright {n})") })
         })
@@ -926,6 +945,7 @@ mod tests {
         assert_eq!(s, "- RootWebArea \"Titulo\" [ref=1]\n  - heading \"Ola\" [ref=7] level=1\n  - link \"Entrar\" [ref=9] url=https://x/login");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn candidates_start_with_chrome_and_include_playwright_when_present() {
         let home = tempfile::tempdir().unwrap();
@@ -938,6 +958,18 @@ mod tests {
         let i1243 = labels.iter().position(|l| *l == "Chromium (Playwright 1243)").unwrap();
         let i1187 = labels.iter().position(|l| *l == "Chromium (Playwright 1187)").unwrap();
         assert!(i1243 < i1187, "o build mais novo vem primeiro");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn candidates_include_linux_chrome_and_playwright() {
+        let home = tempfile::tempdir().unwrap();
+        let pw = home.path().join(".cache/ms-playwright/chromium-1243/chrome-linux/chrome");
+        std::fs::create_dir_all(pw.parent().unwrap()).unwrap();
+        let c = candidates(home.path());
+        assert_eq!(c[0].path, PathBuf::from("/usr/bin/google-chrome-stable"));
+        assert!(c.iter().any(|b| b.path == PathBuf::from("/usr/bin/chromium")));
+        assert!(c.iter().any(|b| b.path == pw));
     }
 
     /// `[ref=N]` da primeira linha da leitura que contem `needle`.

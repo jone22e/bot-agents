@@ -56,9 +56,10 @@ funcionario em pedido delegado, quem decide e o gerente; do gerente, o usuario.
   tarefas) ate o runtime encerrar (`BrowserPool::shutdown_all`, SIGTERM no grupo de processos e
   SIGKILL apos 3 s) ou o DOT ser excluido (`dots.delete` fecha o processo e apaga o perfil).
 - Se o processo morrer, a proxima chamada inicia outro com o mesmo perfil.
-- Binario: primeiro executavel entre Google Chrome (`/Applications`, `~/Applications`), Chromium do
-  cache do Playwright (`~/Library/Caches/ms-playwright/chromium-<n>`, o mais novo primeiro),
-  Chromium, Brave e Edge. Configuracoes (sem tela ainda): `browser.executable` (caminho fixo) e
+- Binario: primeiro executavel entre Google Chrome, Chromium do cache do Playwright (o mais novo
+  primeiro), Chromium, Brave e Edge. No macOS, procura em `/Applications`, `~/Applications` e
+  `~/Library/Caches/ms-playwright`; no Linux, em `/usr/bin`, `/opt/google/chrome`, `/snap/bin` e
+  `~/.cache/ms-playwright`. Configuracoes (sem tela ainda): `browser.executable` (caminho fixo) e
   `browser.headless` (padrao `true`; `false` abre a janela, util para o usuario fazer login em sites
   que o DOT usara).
 - Ambiente do processo: so `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `PATH=/usr/bin:/bin`.
