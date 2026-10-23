@@ -32,7 +32,7 @@ const selectedEngine = ref<EngineKind>("codex");
 const engine = computed(() => engines.byKind(selectedEngine.value));
 const engineReady = computed(() => {
   const cfg = engine.value;
-  return !!(cfg?.enabled && cfg.last_detection?.installed && cfg.last_detection.auth_status !== "unauthenticated" && cfg.model?.trim()
+  return !!(cfg?.enabled && cfg.last_detection?.installed && cfg.last_detection.auth_status !== "unauthenticated"
     && (cfg.kind !== "agy" || engines.agy?.configured));
 });
 
@@ -100,7 +100,7 @@ async function finish(createDot: boolean) {
       </template>
       <template v-else>
         <h2 class="text-base font-semibold text-zinc-100">Configure o assistente de IA</h2>
-        <p class="mt-1 text-sm text-zinc-400">Escolha Codex, Claude Code ou Antigravity. Instale se necessário, entre na conta e defina o modelo padrão dos DOTs.</p>
+        <p class="mt-1 text-sm text-zinc-400">Escolha Codex, Claude Code ou Antigravity. Instale se necessário e entre na conta. Você pode deixar o modelo padrão do assistente.</p>
         <div class="mt-4 flex flex-wrap gap-2">
           <button v-for="cfg in engines.items" :key="cfg.kind" class="rounded-lg border px-3 py-2 text-sm" :class="selectedEngine === cfg.kind ? 'border-violet-500 bg-violet-500/15 text-violet-200' : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'" @click="selectedEngine = cfg.kind">{{ ENGINE_LABEL[cfg.kind] }}</button>
         </div>
@@ -120,7 +120,7 @@ async function finish(createDot: boolean) {
           @toggle="(enabled) => engines.setEnabled(engine!.kind, enabled)" @model="(model) => engines.setModel(engine!.kind, model)"
           @agy-setup="(remove) => engines.agySetup(remove)" @cli-update="usage.update(engine.kind)" @cli-install="installEngine(engine.kind)"
         />
-        <p v-if="engine && !engineReady" class="mt-3 text-xs text-amber-300">Para concluir, deixe o assistente ligado, com login pronto e um modelo escolhido. O Antigravity também precisa da integração ao DOTS.</p>
+        <p v-if="engine && !engineReady" class="mt-3 text-xs text-amber-300">Para concluir, deixe o assistente ligado e com login pronto. O Antigravity também precisa da integração ao DOTS.</p>
         <ErrorBanner :message="engines.error" />
       </template>
 

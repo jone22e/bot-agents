@@ -44,7 +44,7 @@ describe("primeira etapa", () => {
     expect(wrapper.text()).toContain("Configure o assistente de IA");
 
     const engines = useEnginesStore();
-    engines.items = [{ kind: "codex", enabled: true, model: "gpt-5", last_detection: { installed: true, auth_status: "authenticated" } } as EngineConfiguration];
+    engines.items = [{ kind: "codex", enabled: true, model: null, last_detection: { installed: true, auth_status: "authenticated", models: [] } } as EngineConfiguration];
     await flushPromises();
     expect(wrapper.findAll("button").find((button) => button.text() === "Criar o primeiro DOT")?.attributes("disabled")).toBeUndefined();
   });
