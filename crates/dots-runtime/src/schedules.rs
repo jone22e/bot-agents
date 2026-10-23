@@ -71,6 +71,9 @@ fn describe_cron(spec: &str) -> String {
     }
     let (minute, hour, dom, month, dow) = (parts[0], parts[1], parts[2], parts[3], parts[4]);
     if dom == "*" && month == "*" && dow == "*" {
+        if hour == "*" && minute == "*" {
+            return "a cada 1 min".into();
+        }
         if hour == "*" {
             if let Some(n) = minute.strip_prefix("*/").and_then(|v| v.parse::<u32>().ok()).filter(|v| *v > 0) {
                 return format!("a cada {n} min");
@@ -249,6 +252,7 @@ mod tests {
     fn cron_da_conversa_e_legivel() {
         assert_eq!(describe_cron("0 8,10,12,14,16 * * *"), "todos os dias às 08:00, 10:00, 12:00, 14:00, 16:00");
         assert_eq!(describe_cron("*/5 * * * *"), "a cada 5 min");
+        assert_eq!(describe_cron("* * * * *"), "a cada 1 min");
         assert_eq!(describe_cron("0 8 * * 1-5"), "agendamento personalizado");
     }
 

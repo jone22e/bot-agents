@@ -466,7 +466,7 @@ async fn cron_schedule_fires_a_task() {
     assert!(next > dots_core::now() && (next - dots_core::now()).num_seconds() <= 60);
     assert!(rt.client.call("schedules.create", json!({ "dot_id": d.id, "kind": "cron", "spec": "nope", "prompt": "x" })).await.is_err());
     let ts = rt.wait_tasks(&d.id, |ts| ts.iter().any(|t| t.origin == format!("schedule:{}", sch.id)), Duration::from_secs(75)).await;
-    assert_eq!(ts[0].title, "Agendado: cron * * * * *");
+    assert_eq!(ts[0].title, "Agendado: a cada 1 min", "cron vira frase legivel (describe_cron)");
     let after: Schedule = serde_json::from_value(rt.call("schedules.list", json!({ "dot_id": d.id })).await[0].clone()).unwrap();
     assert!(after.last_run_at.is_some() && after.next_run_at.unwrap() > next);
     let evs: Vec<EventRecord> = serde_json::from_value(rt.call("events.list", json!({ "event_type": "schedule.due" })).await).unwrap();
