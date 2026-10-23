@@ -721,10 +721,10 @@ impl RuntimeService {
                     let dots = s.dots().list(false)?;
                     let active = s.tasks().list(&TaskFilter { status: Some(vec![TaskStatus::Queued, TaskStatus::Running, TaskStatus::WaitingApproval, TaskStatus::WaitingUser]), limit: 1000, ..Default::default() })?;
                     let pending = s.approvals().list(true, 500)?;
-                    // Perguntas e pedidos de permissao feitos em pedido delegado vao ao gerente: nao sao pedidos ao usuario.
+                    // Pedidos com tarefa ativa de decisao no gerente nao exigem acao imediata do usuario.
                     let routed: std::collections::HashSet<String> = pending
                         .iter()
-                        .filter(|a| s.delegations().by_child(&a.task_id).ok().flatten().is_some())
+                        .filter(|a| active.iter().any(|t| t.origin == format!("{}:{}", if a.kind == dots_core::ApprovalKind::Question { "question" } else { "approval" }, a.id)))
                         .map(|a| a.id.clone())
                         .collect();
                     let mut out = vec![];

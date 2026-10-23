@@ -379,6 +379,24 @@ async fn worker_permission_request_goes_to_supervisor() {
 }
 
 #[tokio::test]
+async fn direct_worker_permission_request_goes_to_team_manager() {
+    let mut rt = start().await;
+    let manager = rt.create_dot("Gerente direto", "read", "supervisor").await;
+    let worker = rt.create_dot("Funcionario direto", "read", "worker").await;
+    rt.call("teams.create", json!({ "name": "Equipe direta", "manager_dot_id": manager.id, "member_ids": [worker.id] })).await;
+    let task: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": worker.id, "prompt": "DENY:x.txt" })).await).unwrap();
+    let approval: Approval = serde_json::from_value(rt.wait_event("approval.requested", Duration::from_secs(30)).await).unwrap();
+    assert_eq!(approval.dot_id, worker.id);
+    let manager_tasks = rt.wait_tasks(&manager.id, |tasks| tasks.iter().any(|t| t.origin == format!("approval:{}", approval.id) && t.status == TaskStatus::Completed), Duration::from_secs(40)).await;
+    let decision = manager_tasks.iter().find(|t| t.origin == format!("approval:{}", approval.id)).unwrap();
+    assert_eq!(decision.priority, 100);
+    assert_eq!(decision.result_text.as_deref(), Some("DECIDI"));
+    let done = rt.wait_task(&task.id, &[TaskStatus::Completed], Duration::from_secs(40)).await;
+    assert_eq!(done.result_text.as_deref(), Some("ESCREVEU"));
+    rt.stop();
+}
+
+#[tokio::test]
 async fn supervisor_sees_stopped_worker_and_resumes_delegation() {
     let rt = start().await;
     let sup = rt.create_dot("Chefe", "read", "supervisor").await;

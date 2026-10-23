@@ -272,33 +272,42 @@ impl RuntimeService {
         Ok(ToolOutput::ok(format!("Resposta enviada a {}. Ele continua o trabalho e o resultado chega a voce quando terminar.", approval.dot_name)))
     }
 
-    /// Pedido de permissao de um funcionario em pedido delegado: vira uma tarefa para quem delegou decidir.
+    /// Pedido de permissao de um funcionario: vira uma tarefa para quem delegou ou para o gerente da equipe.
     /// Devolve `true` se foi encaminhado.
     pub async fn route_approval_to_manager(&self, ctx: &SharedContext, approval: &dots_core::Approval) -> bool {
         let tid = ctx.task_id.clone();
-        let Ok(Some(d)) = self.storage.call(move |st| st.delegations().by_child(&tid)).await else { return false };
-        let Ok(parent) = self.storage.call({ let p = d.parent_task_id.clone(); move |st| st.tasks().get(&p) }).await else { return false };
+        let did = ctx.dot_id.clone();
+        let Ok(Some((manager_id, parent, context))) = self.storage.call(move |st| {
+            if let Some(d) = st.delegations().by_child(&tid)? {
+                let parent = st.tasks().get(&d.parent_task_id)?;
+                return Ok(Some((d.from_dot_id, Some(parent), format!("no pedido que voce delegou (delegacao {}).\nPedido: {}", d.id, d.request.chars().take(300).collect::<String>()))));
+            }
+            let Some(manager_id) = st.teams().member_of(&did)?.and_then(|team| team.manager_dot_id) else { return Ok(None) };
+            let task = st.tasks().get(&tid)?;
+            Ok(Some((manager_id, None, format!("na tarefa atual.\nPedido: {}", task.prompt.chars().take(300).collect::<String>()))))
+        }).await else { return false };
         let prompt = format!(
-            "Seu funcionario {} pede permissao para uma acao no pedido que voce delegou (delegacao {}).\nPedido: {}\nAcao: {}\nO que ele quer fazer: {}\nRisco: {}\nRecursos: {}\n\nDecida com dots_decide_approval(approval_id=\"{}\", approved=true ou false, reason=\"...\"). Aprove o que esta dentro do pedido que voce fez e do que o usuario ja autorizou. Para acoes irreversiveis (publicar, excluir, finalizar, gastar dinheiro) que o usuario nao autorizou explicitamente, pergunte a ele antes com dots_ask_user e decida quando tiver a resposta. Aprovada uma vez, ele nao pede de novo para este tipo de acao. Ele esta parado esperando a sua decisao.",
-            d.to_dot_name, d.id, d.request.chars().take(300).collect::<String>(), approval.tool, approval.summary, approval.risk.as_str(),
+            "Seu funcionario {} pede permissao para uma acao {}\nAcao: {}\nO que ele quer fazer: {}\nRisco: {}\nRecursos: {}\n\nDecida com dots_decide_approval(approval_id=\"{}\", approved=true ou false, reason=\"...\"). Aprove o que esta dentro do pedido e do que o usuario ja autorizou. Para acoes irreversiveis (publicar, excluir, finalizar, gastar dinheiro) que o usuario nao autorizou explicitamente, pergunte a ele antes com dots_ask_user e decida quando tiver a resposta. Aprovada uma vez, ele nao pede de novo para este tipo de acao. Ele esta parado esperando a sua decisao.",
+            approval.dot_name, context, approval.tool, approval.summary, approval.risk.as_str(),
             if approval.resources.is_empty() { "-".to_string() } else { approval.resources.join(", ") }, approval.id
         );
         let input = TaskCreate {
-            dot_id: d.from_dot_id.clone(),
+            dot_id: manager_id,
             prompt,
-            title: Some(format!("Permissao para {}: {}", d.to_dot_name, approval.summary.chars().take(60).collect::<String>())),
-            kind: Some(parent.kind),
-            conversation_id: parent.conversation_id.clone(),
+            title: Some(format!("Permissao para {}: {}", approval.dot_name, approval.summary.chars().take(60).collect::<String>())),
+            kind: Some(parent.as_ref().map_or(TaskKind::Task, |p| p.kind)),
+            priority: Some(100),
+            conversation_id: parent.as_ref().and_then(|p| p.conversation_id.clone()),
             origin: Some(format!("approval:{}", approval.id)),
-            correlation_id: parent.correlation_id.clone().or(Some(parent.id.clone())),
-            delegation_chain: parent.delegation_chain.clone(),
-            parent_task_id: parent.parent_task_id.clone(),
+            correlation_id: parent.as_ref().and_then(|p| p.correlation_id.clone().or(Some(p.id.clone()))),
+            delegation_chain: parent.as_ref().map(|p| p.delegation_chain.clone()).unwrap_or_default(),
+            parent_task_id: parent.as_ref().and_then(|p| p.parent_task_id.clone()),
             ..Default::default()
         };
         self.create_task(input).await.is_ok()
     }
 
-    /// `dots_decide_approval`: o gerente decide o pedido de permissao de um funcionario em pedido delegado por ele.
+    /// `dots_decide_approval`: o gerente decide o pedido de permissao de um funcionario da equipe.
     pub async fn decide_approval_as_manager(&self, ctx: &SharedContext, approval_id: &str, approved: bool, reason: Option<&str>) -> DotsResult<ToolOutput> {
         let aid = approval_id.trim().to_string();
         let Ok(a) = self.storage.call({ let i = aid.clone(); move |st| st.approvals().get(&i) }).await else {
@@ -310,9 +319,15 @@ impl RuntimeService {
         if a.status != ApprovalStatus::Pending {
             return Ok(ToolOutput::err(format!("este pedido ja foi decidido ({})", a.status.as_str())));
         }
-        match self.storage.call({ let t = a.task_id.clone(); move |st| st.delegations().by_child(&t) }).await? {
-            Some(d) if d.from_dot_id == ctx.dot_id => {}
-            _ => return Ok(ToolOutput::err("este pedido nao e de um funcionario em pedido delegado por voce".into())),
+        let (tid, did, manager_id) = (a.task_id.clone(), a.dot_id.clone(), ctx.dot_id.clone());
+        let is_manager = self.storage.call(move |st| {
+            if let Some(d) = st.delegations().by_child(&tid)? {
+                return Ok(d.from_dot_id == manager_id);
+            }
+            Ok(st.teams().member_of(&did)?.and_then(|team| team.manager_dot_id).as_deref() == Some(manager_id.as_str()))
+        }).await?;
+        if !is_manager {
+            return Ok(ToolOutput::err("este pedido nao e de um funcionario da sua equipe ou delegado por voce".into()));
         }
         let approval = self.decide_approval_by(&aid, approved, reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()), &format!("dot:{}", ctx.dot_id), &format!("seu gerente {}", ctx.dot_name)).await?;
         Ok(ToolOutput::ok(format!("{} para {}: {}. Ele continua o trabalho.", if approved { "Permissao concedida" } else { "Permissao negada" }, approval.dot_name, approval.summary)))
