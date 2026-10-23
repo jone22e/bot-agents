@@ -13,6 +13,7 @@ pub mod conversation;
 pub mod dot;
 pub mod engine;
 pub mod error;
+pub mod goal;
 pub mod ids;
 pub mod installation;
 pub mod memory;
@@ -34,6 +35,7 @@ pub use task::{Execution, ExecutionEvent, ExecutionEventRecord, ExecutionStatus,
 pub use dot::{Dot, DotCreate, DotLimits, DotStatus, DotUpdate, DotWorkspace, FlexiShare, FlexiShareUser};
 pub use engine::{AuthStatus, CliUpdateInfo, CliUpdates, EngineCapability, EngineConfiguration, EngineDetection, EngineKind, EngineModel, ProviderUsage, UsageInfo, UsageWindow};
 pub use error::{DotsError, DotsResult};
+pub use goal::{Goal, GoalCreate, GoalStatus, GoalUpdate};
 pub use ids::new_id;
 pub use installation::Installation;
 pub use runtime::{RuntimeMode, RuntimeStatus};
@@ -71,6 +73,9 @@ mod export_bindings {
         crate::DotTeamInfo::export_all().unwrap();
         crate::Dismissal::export_all().unwrap();
         crate::Notification::export_all().unwrap();
+        crate::Goal::export_all().unwrap();
+        crate::GoalUpdate::export_all().unwrap();
+        crate::GoalCreate::export_all().unwrap();
         crate::UsageInfo::export_all().unwrap();
         crate::CliUpdates::export_all().unwrap();
         crate::Dot::export_all().unwrap();

@@ -4,7 +4,7 @@ use dots_core::{DotsError, DotsResult};
 use rusqlite::{Connection, OpenFlags};
 
 use crate::migrations;
-use crate::repos::{AppsRepo, DismissalsRepo, NotificationsRepo, GroupRepo, LearnedRepo, TeamsRepo, ApprovalsRepo, AuditRepo, ChangesRepo, CheckpointsRepo, ConversationsRepo, DelegationsRepo, DotsRepo, EnginesRepo, EventsRepo, ExecutionsRepo, InstallationRepo, MemoriesRepo, PoliciesRepo, SchedulesRepo, SettingsRepo, SubscriptionsRepo, TasksRepo};
+use crate::repos::{AppsRepo, DismissalsRepo, GoalsRepo, NotificationsRepo, GroupRepo, LearnedRepo, TeamsRepo, ApprovalsRepo, AuditRepo, ChangesRepo, CheckpointsRepo, ConversationsRepo, DelegationsRepo, DotsRepo, EnginesRepo, EventsRepo, ExecutionsRepo, InstallationRepo, MemoriesRepo, PoliciesRepo, SchedulesRepo, SettingsRepo, SubscriptionsRepo, TasksRepo};
 
 #[derive(Debug, Clone)]
 pub struct StorageOptions {
@@ -167,6 +167,9 @@ impl Storage {
     }
     pub fn notifications(&mut self) -> NotificationsRepo<'_> {
         NotificationsRepo::new(&mut self.conn)
+    }
+    pub fn goals(&mut self) -> GoalsRepo<'_> {
+        GoalsRepo::new(&mut self.conn)
     }
 
     /// Copia consistente do banco (API de backup online do SQLite) para `dest`.

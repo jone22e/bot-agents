@@ -608,6 +608,14 @@ impl RuntimeService {
                 self.events.emit("automation.changed", json!({ "dot_id": sub.dot_id }));
                 Ok(json!({ "ok": true }))
             }
+            "goals.list" => {
+                let DotIdParams { dot_id } = p(params).unwrap_or_default();
+                Ok(json!(self.storage.call(move |s| s.goals().list(dot_id.as_deref(), false)).await?))
+            }
+            "goals.history" => {
+                let IdParams { id } = p(params)?;
+                Ok(json!(self.storage.call(move |s| s.goals().history(&id, 100)).await?))
+            }
             "schedules.list" => {
                 let DotIdParams { dot_id } = p(params).unwrap_or_default();
                 Ok(json!(self.storage.call(move |s| s.schedules().list(dot_id.as_deref())).await?))

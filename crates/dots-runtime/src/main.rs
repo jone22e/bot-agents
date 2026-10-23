@@ -19,6 +19,7 @@ mod hiring;
 mod staffing;
 mod teams;
 mod gateway;
+mod goals;
 mod lock;
 mod mcp_gateway;
 mod paths;

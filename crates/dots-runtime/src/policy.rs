@@ -301,6 +301,11 @@ impl ExecutionContext {
             "dots_schedule_create" => Ok((RiskLevel::Read, vec![], format!("agendar ({} {}): {}", s("kind"), s("spec"), s("prompt").chars().take(60).collect::<String>()))),
             "dots_schedule_list" => Ok((RiskLevel::Read, vec![], "listar agendamentos".into())),
             "dots_schedule_cancel" => Ok((RiskLevel::Read, vec![s("id")], format!("cancelar agendamento {}", s("id")))),
+            // Metas so mudam dados do DOTS; o usuario acompanha no Flexi web.
+            "dots_goal_create" => Ok((RiskLevel::Read, vec![], format!("registrar meta: {}", s("title").chars().take(60).collect::<String>()))),
+            "dots_goal_progress" => Ok((RiskLevel::Read, vec![s("id")], format!("lancar progresso da meta {}", s("id")))),
+            "dots_goal_list" => Ok((RiskLevel::Read, vec![], "listar metas".into())),
+            "dots_goal_close" => Ok((RiskLevel::Read, vec![s("id")], format!("encerrar meta {}", s("id")))),
             "dots_delegate" => Ok((RiskLevel::Read, vec![s("to")], format!("delegar a {}: {}", s("to"), s("request").chars().take(60).collect::<String>()))),
             "dots_cancel_delegation" => Ok((RiskLevel::Read, vec![s("id")], "cancelar delegacao".into())),
             "dots_ask_user" => Ok((RiskLevel::Read, vec![], format!("perguntar: {}", s("question").chars().take(60).collect::<String>()))),

@@ -417,6 +417,10 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
         s.push_str(&format!("- Comandos permitidos: {}\n", policy.allowed_commands.join(", ")));
     }
     s.push_str("- Ao concluir, responda com um resumo objetivo do que foi feito e do que ficou pendente.\n");
+    match (dot.role == DotRole::Supervisor, manager) {
+        (true, _) | (false, None) => s.push_str("- Quando o usuario declarar uma META (um numero a atingir, com ou sem prazo), registre na hora com dots_goal_create e confirme o que registrou. Se a meta exigir acompanhamento futuro, confira dots_schedule_list e crie com dots_schedule_create uma rodada de verificacao na frequencia que o usuario definiu; inclua o id da meta no pedido. Se nao houver frequencia definida, pergunte antes de agendar. Ao fim de cada rodada ou entrega, lance o progresso com dots_goal_progress (valor acumulado e nota curta). Veja dots_goal_list antes de criar para nao duplicar; encerre com dots_goal_close. O usuario acompanha a meta pelo Flexi: numeros nao lancados nao existem para ele.\n"),
+        (false, Some(m)) => s.push_str(&format!("- Metas sao do gerente: NAO use dots_goal_*. Relate os numeros da sua entrega no resultado da tarefa para {m} lancar o progresso.\n")),
+    }
     match manager {
         Some(m) => s.push_str(&format!("- So o gerente avisa o usuario: NAO use dots_notify_user. Se algo precisar de atencao (erro que te impede de continuar, pendencia, resultado importante), relate no resultado da tarefa: ele chega ao seu gerente {m}, que decide se avisa o usuario. Para decisoes, pergunte com dots_ask_user.\n")),
         None => s.push_str("- Se algo precisar da atencao do usuario (erro que te impede de continuar, pendencia que so ele resolve, resultado importante), avise com dots_notify_user: o aviso fica no topo da tela ate ele clicar. Uma vez por assunto; nao repita. Para decisoes dele, pergunte com dots_ask_user.\n"),
@@ -493,6 +497,11 @@ mod tests {
         assert!(s.contains("avise com dots_notify_user"), "DOT sem gerente avisa o usuario");
         let e = build_instructions(&dot, &policy, &[], None, &[], &[], None, Some("Milei"));
         assert!(e.contains("NAO use dots_notify_user") && e.contains("seu gerente Milei") && !e.contains("avise com dots_notify_user"), "funcionario relata ao gerente em vez de avisar o usuario");
+        assert!(s.contains("registre na hora com dots_goal_create"), "DOT sem gerente registra metas");
+        assert!(e.contains("NAO use dots_goal_*") && !e.contains("dots_goal_create"), "funcionario nao registra metas");
+        let gerente = dots_core::Dot { role: DotRole::Supervisor, ..dot.clone() };
+        let nested = build_instructions(&gerente, &policy, &[], None, &[], &[], Some((0, 3)), Some("Milei"));
+        assert!(nested.contains("registre na hora com dots_goal_create"), "gerente de subequipe registra as metas da propria equipe");
         assert!(s.contains("NAO repita estes erros") && s.contains("revisar o preco antes de publicar") && s.contains("Milei"), "licoes de demissao entram nas instrucoes");
         assert!(s.contains("Mapa do app: teste"));
         assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");
