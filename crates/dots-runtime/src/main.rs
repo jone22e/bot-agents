@@ -264,7 +264,8 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         flexi: crate::flexi::FlexiRegistry::new(if std::env::var("DOTS_SECRETS").as_deref() == Ok("memory") {
             Arc::new(dots_flexi::MemoryStore::default())
         } else {
-            Arc::new(dots_flexi::KeychainStore::new("com.c2s.dots"))
+            // Chaveiro do sistema; onde ele nao funciona (ex.: Docker bloqueia keyctl), cofre em arquivo 0600 na pasta de dados.
+            Arc::new(dots_flexi::FallbackStore::new(dots_flexi::KeychainStore::new("com.c2s.dots"), dots_flexi::FileStore::new(layout.root.join("secrets.json"))))
         }),
     });
 

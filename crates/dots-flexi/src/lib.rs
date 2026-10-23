@@ -13,4 +13,4 @@ pub mod secrets;
 
 pub use catalog::{FlexiTool, ToolRisk, catalog, find_tool, tool_definitions};
 pub use client::{BrowserLoginChallenge, BrowserLoginPoll, FlexiClient, FlexiError, LoginOutcome, SessionInfo};
-pub use secrets::{SecretStore, KeychainStore, MemoryStore};
+pub use secrets::{FallbackStore, FileStore, KeychainStore, MemoryStore, SecretStore};
