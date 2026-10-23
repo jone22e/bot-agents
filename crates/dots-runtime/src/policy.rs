@@ -304,6 +304,7 @@ impl ExecutionContext {
             // Metas so mudam dados do DOTS; o usuario acompanha no Flexi web.
             "dots_goal_create" => Ok((RiskLevel::Read, vec![], format!("registrar meta: {}", s("title").chars().take(60).collect::<String>()))),
             "dots_goal_progress" => Ok((RiskLevel::Read, vec![s("id")], format!("lancar progresso da meta {}", s("id")))),
+            "dots_goal_update" => Ok((RiskLevel::Read, vec![s("id")], format!("alterar meta {}", s("id")))),
             "dots_goal_list" => Ok((RiskLevel::Read, vec![], "listar metas".into())),
             "dots_goal_close" => Ok((RiskLevel::Read, vec![s("id")], format!("encerrar meta {}", s("id")))),
             "dots_delegate" => Ok((RiskLevel::Read, vec![s("to")], format!("delegar a {}: {}", s("to"), s("request").chars().take(60).collect::<String>()))),

@@ -1,9 +1,10 @@
 //! Metas (ADR 0017): ferramentas `dots_goal_*` com que o gerente registra a meta que o usuario declarou na
-//! conversa e lanca o progresso a cada rodada. Cada acao deixa uma nota na conversa (origem `goal:<id>`) e
+//! conversa, lanca o progresso a cada rodada e altera alvo ou prazo quando o usuario muda de ideia (sem recriar). Cada acao deixa uma nota na conversa (origem `goal:<id>`) e
 //! emite `goal.changed`, que o `flexi_sync` espelha no Flexi web.
 
 use chrono::Local;
 use dots_core::{DotsResult, Goal, GoalCreate, GoalStatus, MessageRole, Timestamp};
+use dots_storage::repos::GoalEdit;
 use serde_json::json;
 
 use crate::policy::SharedContext;
@@ -84,8 +85,12 @@ impl RuntimeService {
             Err(e) => return Ok(ToolOutput::err(e)),
         };
         let existing = self.storage.call({ let d = ctx.dot_id.clone(); move |st| st.goals().list(Some(&d), true) }).await?;
-        if let Some(same) = existing.iter().find(|g| g.title.trim().eq_ignore_ascii_case(title.trim()) && (g.target - target).abs() < 1e-9) {
-            return Ok(ToolOutput::ok(format!("esta meta ja existe ({}): {}; lance o progresso com dots_goal_progress", same.id, describe(same))));
+        if let Some(same) = existing.iter().find(|g| g.title.trim().eq_ignore_ascii_case(title.trim())) {
+            return Ok(ToolOutput::ok(if (same.target - target).abs() < 1e-9 {
+                format!("esta meta ja existe ({}): {}; lance o progresso com dots_goal_progress", same.id, describe(same))
+            } else {
+                format!("ja existe uma meta ativa com este titulo ({}): {}; para mudar o alvo ou o prazo use dots_goal_update em vez de criar outra", same.id, describe(same))
+            }));
         }
         if existing.len() >= DOT_MAX_ACTIVE_GOALS {
             return Ok(ToolOutput::err(format!("limite de {DOT_MAX_ACTIVE_GOALS} metas ativas: encerre uma com dots_goal_close (veja dots_goal_list)")));
@@ -132,6 +137,47 @@ impl RuntimeService {
             describe(&goal),
             if reached { ". Alvo atingido: encerre com dots_goal_close (status done) se o periodo acabou, ou siga acompanhando." } else { "" }
         )))
+    }
+
+    /// Altera alvo, titulo, unidade ou prazo de uma meta ativa; o progresso e o historico ficam.
+    pub async fn goal_update_for_dot(&self, ctx: &SharedContext, id: &str, title: &str, target: Option<f64>, unit: Option<&str>, deadline: &str) -> DotsResult<ToolOutput> {
+        if let Some(block) = self.goal_manager_block(ctx).await? {
+            return Ok(ToolOutput::err(block));
+        }
+        let goal = match self.storage.call({ let id = id.trim().to_string(); move |st| st.goals().get(&id) }).await {
+            Ok(g) if g.dot_id == ctx.dot_id => g,
+            _ => return Ok(ToolOutput::err(format!("meta '{id}' nao encontrada entre as suas (veja dots_goal_list)"))),
+        };
+        let period_end = match deadline.trim() {
+            "" => None,
+            "sem prazo" | "none" => Some(None),
+            spec => match parse_deadline(spec) {
+                Ok(d) => Some(d),
+                Err(e) => return Ok(ToolOutput::err(e)),
+            },
+        };
+        let title: String = title.trim().chars().take(160).collect();
+        let unit: Option<String> = unit.map(|u| u.trim().chars().take(30).collect());
+        if title.is_empty() && target.is_none() && unit.is_none() && period_end.is_none() {
+            return Ok(ToolOutput::err("informe o que muda: title, target, unit ou deadline".into()));
+        }
+        let before = describe(&goal);
+        let goal = match self
+            .storage
+            .call({
+                let (id, title, unit) = (goal.id.clone(), title, unit);
+                move |st| st.goals().update(&id, GoalEdit { title: (!title.is_empty()).then_some(title.as_str()), unit: unit.as_deref(), target, period_end })
+            })
+            .await
+        {
+            Ok(g) => g,
+            Err(dots_core::DotsError::Validation(m)) => return Ok(ToolOutput::err(m)),
+            Err(e) => return Err(e),
+        };
+        self.audit("goal.update", "dot", Some(&goal.dot_id), json!({ "id": goal.id, "title": goal.title, "target": goal.target, "unit": goal.unit, "period_end": goal.period_end, "by": "dot", "task_id": ctx.task_id })).await?;
+        self.goal_changed(&goal);
+        self.goal_note(ctx, format!("{} alterou a meta: {} (antes: {}; prazo: {})", ctx.dot_name, describe(&goal), before, local_date(goal.period_end)), &goal).await;
+        Ok(ToolOutput::ok(format!("meta alterada ({}): {}; prazo {}. O progresso e o historico foram mantidos.", goal.id, describe(&goal), local_date(goal.period_end))))
     }
 
     pub async fn goal_list_for_dot(&self, ctx: &SharedContext) -> DotsResult<ToolOutput> {

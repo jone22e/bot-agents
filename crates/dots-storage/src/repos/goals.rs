@@ -1,4 +1,4 @@
-use dots_core::{DotsError, DotsResult, Goal, GoalCreate, GoalStatus, GoalUpdate, new_id};
+use dots_core::{DotsError, DotsResult, Goal, GoalCreate, GoalStatus, GoalUpdate, Timestamp, new_id};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::{parse_opt_ts, parse_ts, ts};
@@ -46,6 +46,16 @@ fn map_upd(r: &Row<'_>) -> rusqlite::Result<UpdRaw> {
 fn build_upd(r: UpdRaw) -> DotsResult<GoalUpdate> {
     let (id, goal_id, value, delta, note, task_id, created_at) = r;
     Ok(GoalUpdate { id, goal_id, value, delta, note, task_id, created_at: parse_ts(&created_at)? })
+}
+
+/// Campos que podem mudar numa meta ativa; `None` mantem o valor atual.
+#[derive(Debug, Default, Clone)]
+pub struct GoalEdit<'a> {
+    pub title: Option<&'a str>,
+    pub unit: Option<&'a str>,
+    pub target: Option<f64>,
+    /// `Some(None)` remove o prazo.
+    pub period_end: Option<Option<Timestamp>>,
 }
 
 impl<'a> GoalsRepo<'a> {
@@ -136,6 +146,35 @@ impl<'a> GoalsRepo<'a> {
         Ok((self.get(id)?, upd))
     }
 
+    /// Altera titulo, unidade, alvo ou prazo de uma meta ativa, sem mexer no progresso nem no historico.
+    pub fn update(&mut self, id: &str, edit: GoalEdit<'_>) -> DotsResult<Goal> {
+        let goal = self.get(id)?;
+        if goal.status != GoalStatus::Active {
+            return Err(DotsError::Validation(format!("a meta '{}' ja foi encerrada", goal.title)));
+        }
+        let title = edit.title.map(str::trim).unwrap_or(&goal.title);
+        if title.is_empty() {
+            return Err(DotsError::Validation("a meta precisa de um titulo".into()));
+        }
+        let unit = edit.unit.map(str::trim).unwrap_or(&goal.unit);
+        let target = edit.target.unwrap_or(goal.target);
+        if !target.is_finite() || target <= 0.0 {
+            return Err(DotsError::Validation("o alvo da meta precisa ser um numero maior que zero".into()));
+        }
+        let now = dots_core::now();
+        let period_end = edit.period_end.unwrap_or(goal.period_end);
+        if period_end.is_some_and(|end| end <= now) {
+            return Err(DotsError::Validation("o prazo da meta ja passou".into()));
+        }
+        self.conn
+            .execute(
+                "UPDATE goals SET title = ?1, unit = ?2, target = ?3, period_end = ?4, updated_at = ?5 WHERE id = ?6",
+                params![title, unit, target, period_end.as_ref().map(ts), ts(&now), id],
+            )
+            .map_err(storage_err)?;
+        self.get(id)
+    }
+
     /// Encerra a meta como cumprida ou cancelada.
     pub fn close(&mut self, id: &str, status: GoalStatus) -> DotsResult<Goal> {
         if status == GoalStatus::Active {
@@ -189,5 +228,23 @@ mod tests {
         assert!(st.goals().list(Some(&dot.id), true).unwrap().is_empty());
         assert_eq!(st.goals().list(None, false).unwrap().len(), 1);
         assert!(st.goals().create(GoalCreate { dot_id: dot.id.clone(), title: "x".into(), unit: String::new(), target: 0.0, current: 0.0, period_end: None, task_id: None }).is_err());
+    }
+
+    #[test]
+    fn altera_alvo_titulo_e_prazo_sem_perder_progresso() {
+        let mut st = open();
+        let dot = st.dots().create("user", dots_core::DotCreate { name: "Gerente".into(), ..Default::default() }, None).unwrap();
+        let g = st.goals().create(GoalCreate { dot_id: dot.id.clone(), title: "Republicacao".into(), unit: "anuncios".into(), target: 50.0, current: 1.0, period_end: None, task_id: None }).unwrap();
+        let prazo = dots_core::now() + chrono::Duration::days(1);
+        let g2 = st.goals().update(&g.id, GoalEdit { target: Some(200.0), period_end: Some(Some(prazo)), ..Default::default() }).unwrap();
+        assert_eq!((g2.target, g2.current, g2.title.as_str(), g2.unit.as_str()), (200.0, 1.0, "Republicacao", "anuncios"));
+        assert_eq!(g2.period_end.map(|t| t.timestamp()), Some(prazo.timestamp()));
+        assert_eq!(st.goals().history(&g.id, 10).unwrap().len(), 1, "editar nao cria lancamento");
+        let g3 = st.goals().update(&g.id, GoalEdit { title: Some(" Republicacao 200/dia "), period_end: Some(None), ..Default::default() }).unwrap();
+        assert_eq!((g3.title.as_str(), g3.period_end, g3.target), ("Republicacao 200/dia", None, 200.0));
+        assert!(st.goals().update(&g.id, GoalEdit { target: Some(0.0), ..Default::default() }).is_err(), "alvo zero e invalido");
+        assert!(st.goals().update(&g.id, GoalEdit { title: Some("  "), ..Default::default() }).is_err(), "titulo vazio e invalido");
+        st.goals().close(&g.id, GoalStatus::Cancelled).unwrap();
+        assert!(st.goals().update(&g.id, GoalEdit { target: Some(10.0), ..Default::default() }).is_err(), "meta encerrada nao muda");
     }
 }

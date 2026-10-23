@@ -18,10 +18,15 @@ tarefas periodicas, modelo da IA) e a saida da aba Desempenho do Flexi.
   corrigir papel, autor, origem, detalhe e data. O cron vira frase legivel (`describe_cron`: "todos os dias as
   08:00, 10:00"), e `mark_run` emite `automation.changed` para o Flexi ver o proximo disparo.
 - **Metas** (migracao 0015: `goals`, `goal_updates`; `dots_core::Goal`). Ferramentas `dots_goal_create`,
-  `dots_goal_progress` (valor acumulado ou delta, com nota), `dots_goal_list` e `dots_goal_close`. So quem nao e
-  funcionario de uma equipe registra meta (o gerente); funcionario recebe a orientacao de relatar os numeros ao
-  gerente. Cada acao deixa uma nota na conversa (origem `goal:<id>`), audita e emite `goal.changed`. IPCs
-  `goals.list` e `goals.history` para o app.
+  `dots_goal_progress` (valor acumulado ou delta, com nota), `dots_goal_update` (alvo, titulo, unidade ou prazo
+  de uma meta ativa, sem mexer no progresso; `deadline` "sem prazo" remove o prazo), `dots_goal_list` e
+  `dots_goal_close`. So quem nao e funcionario de uma equipe registra meta (o gerente); funcionario recebe a
+  orientacao de relatar os numeros ao gerente. `dots_goal_create` recusa titulo repetido entre as metas ativas:
+  com o mesmo alvo manda lancar progresso, com alvo diferente manda usar `dots_goal_update`, para o gerente nao
+  recriar a meta (e cancelar a antiga) quando o usuario muda o alvo (2026-10-23: a Fernanda fez isso ao passar
+  de 50 para 200 por dia). Cada acao deixa uma nota na conversa (origem `goal:<id>`), audita (`goal.create`,
+  `goal.progress`, `goal.update`, `goal.close`) e emite `goal.changed`. IPCs `goals.list` e `goals.history`
+  para o app.
 - **Sincronizacao** (`POST /app/sincronizar`): `agendamentos` (lista inteira, em `automation.changed`) e `metas`
   (com os 30 lancamentos mais recentes, em `goal.changed`). O registro (`PUT /app/agentes`) leva `motores`
   (catalogo de modelos detectado por motor) e `motor`/`modelo` de cada DOT. `desempenho` deixou de ir ao Flexi.
@@ -33,7 +38,8 @@ tarefas periodicas, modelo da IA) e a saida da aba Desempenho do Flexi.
   `agendamentos` nos agentes; `motores` no app; tabelas `agentes_dots_metas` e `agentes_dots_comandos`. Leitura
   das colunas `timestamp` por `at time zone current_setting('TimeZone')` e gravacao de datas do app por
   `::timestamptz`. Painel so com agentes (sem abas); botao direito no agente abre o menu; metas em cartao visual
-  (anel, ritmo esperado, projecao, ultimos 7 dias); so o dono troca modelo, pausa e mexe nas tarefas periodicas.
+  (anel, ritmo esperado, projecao, ultimos 7 dias; `listarMetas` nao devolve as canceladas, so ativas e
+  concluidas); so o dono troca modelo, pausa e mexe nas tarefas periodicas.
 
 ## Consequencias
 - O historico antigo no Flexi so e corrigido para as 50 mensagens mais recentes de cada DOT (reenvio unico).

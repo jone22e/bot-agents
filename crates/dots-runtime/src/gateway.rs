@@ -334,6 +334,7 @@ impl RuntimeService {
             "dots_schedule_cancel" => self.schedule_cancel_for_dot(ctx, &s("id")).await,
             "dots_goal_create" => self.goal_create_for_dot(ctx, &s("title"), args.get("target").and_then(|v| v.as_f64()).unwrap_or(0.0), &s("unit"), args.get("current").and_then(|v| v.as_f64()).unwrap_or(0.0), &s("deadline")).await,
             "dots_goal_progress" => self.goal_progress_for_dot(ctx, &s("id"), args.get("value").and_then(|v| v.as_f64()), args.get("delta").and_then(|v| v.as_f64()), &s("note")).await,
+            "dots_goal_update" => self.goal_update_for_dot(ctx, &s("id"), &s("title"), args.get("target").and_then(|v| v.as_f64()), args.get("unit").and_then(|v| v.as_str()), &s("deadline")).await,
             "dots_goal_list" => self.goal_list_for_dot(ctx).await,
             "dots_goal_close" => self.goal_close_for_dot(ctx, &s("id"), &s("status")).await,
             "dots_dismiss_employee" => self.dismiss_employee(ctx, &s("dot"), &s("reason"), &s("lesson")).await,
