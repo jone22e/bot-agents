@@ -125,7 +125,7 @@ onUnmounted(() => { document.removeEventListener("mousedown", onDoc); window.rem
             </button>
           </template>
           <p v-if="groups.length && !filtered.length" class="m-2 text-xs text-zinc-500">Nenhum modelo com esse nome.</p>
-          <p v-if="noCatalog" class="m-2 text-xs text-zinc-500">O assistente ainda nao informou a lista de modelos. Clique em "Verificar de novo" em Configuracoes > Assistentes de IA.</p>
+          <p v-if="noCatalog" class="m-2 text-xs text-zinc-500">A lista de modelos ainda nao esta disponivel. Deixe no padrao do assistente ou clique em "Verificar de novo".</p>
           <hr v-if="groups.length" class="mx-1 my-1.5 border-zinc-800" />
           <button type="button" class="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm" :class="[index === extra(0) ? 'cur bg-zinc-800' : '', !customMode && !modelValue ? 'text-indigo-400' : 'text-zinc-100']" @mouseenter="index = extra(0)" @click="pick('')">
             <span class="flex-1 truncate font-medium">{{ emptyLabel }}</span>

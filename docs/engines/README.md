@@ -77,8 +77,9 @@ Auditoria registrou `tool.dots_write_file` e `tool.dots_list_dir` com `outcome=o
 O DOTS so passa a flag de modelo quando ha um valor definido; sem valor, cada CLI usa o proprio padrao. Precedencia:
 modelo do DOT (`dot_engines.config_json.model`, campo Avancado do DOT) > modelo padrao do motor
 (`engine_configurations.model`, tela Configuracoes > Assistentes de IA) > padrao do CLI. Trocar o motor principal de um DOT
-descarta o modelo, porque o nome e especifico de cada CLI. A lista oferecida no seletor vem, como no ovrgit, do proprio
+descarta o modelo, porque o nome e especifico de cada CLI. A lista oferecida no seletor vem do proprio
 CLI na deteccao (`EngineDetection.models`): Codex le `~/.codex/models_cache.json` (ou `$CODEX_HOME`), sem os
-`visibility: "hide"` e na ordem de `priority`; AGY roda `agy models` (linhas `id<TAB>nome`); o Claude nao lista modelos e
+`visibility: "hide"` e na ordem de `priority`; se o cache nao tem modelos, consulta `model/list` via `codex app-server`.
+AGY roda `agy models` (linhas `id<TAB>nome`); o Claude nao lista modelos e
 usa a lista fixa da interface (`apps/desktop/src/lib/models.ts`). Nomes digitados em "Outro" nao sao validados: um nome
 invalido falha na execucao com a mensagem do proprio CLI.

@@ -68,7 +68,7 @@ const state = computed<{ title: string; help: string; cls: string }>(() => {
     <div v-if="state.help || cliError || (det && !det.installed) || update?.available || det?.issues.length || (config.kind === 'agy' && det?.installed)" class="space-y-3 border-t border-zinc-800 px-5 py-4 text-xs">
       <p v-if="state.help" class="text-sm text-zinc-300">{{ state.help }}</p>
       <p v-if="cliError" class="text-red-300">{{ cliError }}</p>
-      <!-- Nao instalado: instalador oficial (o mesmo do site), sem perguntas. -->
+      <!-- Nao instalado: fonte oficial do CLI, sem perguntas. -->
       <div v-if="det && !det.installed" class="flex items-center gap-3">
         <button class="btn-primary" :disabled="installing || busy" @click="emit('cliInstall')"><Download :size="14" /> {{ installing ? "Instalando…" : installedNow ? "Instalar de novo" : "Instalar" }}</button>
         <span v-if="installedNow" class="text-emerald-300">Instalado. Para entrar na conta, rode <code class="font-mono text-zinc-300">{{ PROVIDER_LOGIN[config.kind] }}</code> no terminal e clique em Verificar de novo.</span>
@@ -114,7 +114,7 @@ const state = computed<{ title: string; help: string; cls: string }>(() => {
         </div>
         <p class="mt-2 text-xs leading-relaxed text-zinc-500">
           Vale para todos os DOTs que usam este assistente. Cada DOT pode escolher outro modelo em Avançado.
-          <template v-if="config.kind !== 'claude'">{{ det.models?.length ? `A lista tem ${det.models.length} modelos informados pelo próprio assistente e é atualizada em Verificar de novo.` : "O assistente ainda não informou a lista de modelos: clique em Verificar de novo." }}</template>
+          <template v-if="config.kind !== 'claude'">{{ det.models?.length ? `A lista tem ${det.models.length} modelos informados pelo próprio assistente e é atualizada em Verificar de novo.` : "A lista de modelos ainda não está disponível. Deixe vazio para usar o padrão do assistente." }}</template>
         </p>
       </div>
     </div>

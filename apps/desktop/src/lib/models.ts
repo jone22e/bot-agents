@@ -1,7 +1,7 @@
-// Catalogo de modelos por assistente (mesma origem do ovrgit/Ovseer):
+// Catalogo de modelos por assistente:
 // - Claude Code: lista fixa abaixo (o CLI nao lista modelos).
 // - Codex e Antigravity: o proprio CLI informa na deteccao (`EngineDetection.models`:
-//   `~/.codex/models_cache.json` e `agy models`).
+//   cache local do Codex (ou `model/list` via app-server) e `agy models`).
 import type { EngineKind, EngineModel } from "@dots/shared-types";
 
 export interface ModelOption { id: string; label: string; description?: string }
