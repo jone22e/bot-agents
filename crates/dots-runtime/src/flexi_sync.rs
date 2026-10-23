@@ -139,14 +139,35 @@ pub fn prompt_for(msg: &InboxMessage) -> String {
     format!("{autor} (pelo Flexi): {}", msg.conteudo.trim())
 }
 
-/// O que o Flexi guarda de cada DOT compartilhado.
-pub fn agent_payload(dot: &Dot) -> Value {
+/// Usuarios do Flexi que veem o DOT: os dele, com "Compartilhar no Flexi" ligado; senao, os do gerente da equipe
+/// dele (compartilhar o gerente compartilha os funcionarios), subindo pelas equipes ate achar um gerente compartilhado.
+pub fn shared_users(dot: &Dot, dots: &[Dot], teams: &[Team]) -> Vec<i64> {
+    let mut current = dot;
+    for _ in 0..8 {
+        if current.flexi_share.enabled {
+            return current.flexi_share.users.iter().map(|u| u.id).collect();
+        }
+        let manager = teams
+            .iter()
+            .find(|t| t.member_ids.iter().any(|id| id == &current.id))
+            .and_then(|t| t.manager_dot_id.as_deref())
+            .and_then(|m| dots.iter().find(|d| d.id == m));
+        match manager {
+            Some(m) if m.id != current.id => current = m,
+            _ => return vec![],
+        }
+    }
+    vec![]
+}
+
+/// O que o Flexi guarda de cada DOT: o dono ve todos os dele; `usuarios` sao os outros que tambem veem.
+pub fn agent_payload(dot: &Dot, usuarios: Vec<i64>) -> Value {
     json!({
         "id": dot.id,
         "nome": dot.name,
         "descricao": dot.description,
         "status": dot.status.as_str(),
-        "usuarios": dot.flexi_share.users.iter().map(|u| u.id).collect::<Vec<_>>(),
+        "usuarios": usuarios,
     })
 }
 
@@ -269,15 +290,15 @@ impl RuntimeService {
         Ok(if client.session_cookie().is_some() { Some((conn, client)) } else { None })
     }
 
-    /// DOTs compartilhados no Flexi (ligados e nao arquivados).
+    /// DOTs que o Flexi conhece: todos os nao arquivados (o dono ve todos; os outros usuarios, so os compartilhados).
     async fn flexi_shared_dots(&self) -> DotsResult<Vec<Dot>> {
-        Ok(self.storage.call(|s| s.dots().list(false)).await?.into_iter().filter(|d| d.flexi_share.enabled && d.status != DotStatus::Archived).collect())
+        Ok(self.storage.call(|s| s.dots().list(false)).await?.into_iter().filter(|d| d.status != DotStatus::Archived).collect())
     }
 
     /// Estado atual dos DOTs compartilhados, na mesma forma da lista de contatos do app.
     async fn flexi_shared_states(&self) -> DotsResult<Vec<Value>> {
         let contacts: Vec<Contact> = serde_json::from_value(self.dispatch("contacts.list", json!({})).await?).map_err(|e| DotsError::Internal(format!("contatos invalidos: {e}")))?;
-        Ok(contacts.iter().filter(|c| c.dot.flexi_share.enabled && c.dot.status != DotStatus::Archived).map(state_payload).collect())
+        Ok(contacts.iter().filter(|c| c.dot.status != DotStatus::Archived).map(state_payload).collect())
     }
 
     /// Equipes do app, na ordem escolhida pelo usuario, para o Flexi agrupar os DOTs como a lista de contatos.
@@ -347,8 +368,10 @@ impl RuntimeService {
 
 async fn register_agents(svc: &RuntimeService, client: &FlexiClient) -> Result<(), SyncError> {
     let dots = svc.flexi_shared_dots().await?;
+    let teams = svc.storage.call(|s| s.teams().list()).await?;
     let equipes = svc.flexi_teams().await?;
-    let body = json!({ "versao": crate::VERSION, "agentes": dots.iter().map(agent_payload).collect::<Vec<_>>(), "equipes": equipes });
+    let agentes = dots.iter().map(|d| agent_payload(d, shared_users(d, &dots, &teams))).collect::<Vec<_>>();
+    let body = json!({ "versao": crate::VERSION, "agentes": agentes, "equipes": equipes });
     client.call("PUT", &path("/agentes"), None, Some(&body)).await?;
     tracing::debug!(agentes = dots.len(), equipes = equipes.len(), "DOTs compartilhados registrados no Flexi");
     Ok(())
@@ -356,8 +379,8 @@ async fn register_agents(svc: &RuntimeService, client: &FlexiClient) -> Result<(
 
 async fn start_message(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState, msg: &InboxMessage) -> Result<(), SyncError> {
     let dot = svc.storage.call({ let id = msg.agente_id.clone(); move |s| s.dots().get(&id) }).await.ok();
-    let Some(dot) = dot.filter(|d| d.flexi_share.enabled && d.status != DotStatus::Archived) else {
-        client.call("POST", &path(&format!("/mensagens/{}/estado", msg.id)), None, Some(&json!({ "estado": "erro", "detalhe": "este agente nao esta mais compartilhado" }))).await?;
+    let Some(dot) = dot.filter(|d| d.status != DotStatus::Archived) else {
+        client.call("POST", &path(&format!("/mensagens/{}/estado", msg.id)), None, Some(&json!({ "estado": "erro", "detalhe": "este agente nao existe mais no app" }))).await?;
         return Ok(());
     };
     let cid = svc.flexi_conversation_for(&dot.id).await?;
@@ -655,6 +678,43 @@ mod tests {
         assert_eq!(a["membros"], json!(["f-1"]));
         assert_eq!(out[0]["pai"], Value::Null);
         assert_eq!(out[0]["gerente_id"], Value::Null);
+    }
+
+    #[test]
+    fn compartilhar_o_gerente_compartilha_os_funcionarios() {
+        let dot = |id: &str, enabled: bool, users: &[i64]| Dot {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            objective: String::new(),
+            instructions: String::new(),
+            primary_engine: None,
+            model: None,
+            workspace_path: None,
+            limits: Default::default(),
+            status: DotStatus::Active,
+            role: dots_core::DotRole::Worker,
+            flexi_share: dots_core::FlexiShare { enabled, users: users.iter().map(|u| dots_core::FlexiShareUser { id: *u, name: String::new() }).collect() },
+            created_at: dots_core::now(),
+            updated_at: dots_core::now(),
+        };
+        let team = |id: &str, manager: &str, members: &[&str]| Team {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            manager_dot_id: Some(manager.into()),
+            member_ids: members.iter().map(|m| m.to_string()).collect(),
+            created_at: dots_core::now(),
+            updated_at: dots_core::now(),
+        };
+        let dots = vec![dot("ger", true, &[7, 9]), dot("func", false, &[]), dot("sub-ger", false, &[]), dot("sub-func", false, &[]), dot("proprio", true, &[3]), dot("solto", false, &[])];
+        let teams = vec![team("eq", "ger", &["func", "sub-ger"]), team("sub", "sub-ger", &["sub-func", "proprio"])];
+        assert_eq!(shared_users(&dots[0], &dots, &teams), vec![7, 9]);
+        assert_eq!(shared_users(&dots[1], &dots, &teams), vec![7, 9]);
+        assert_eq!(shared_users(&dots[3], &dots, &teams), vec![7, 9], "sobe duas equipes ate o gerente compartilhado");
+        assert_eq!(shared_users(&dots[4], &dots, &teams), vec![3], "o proprio compartilhamento vale mais");
+        assert!(shared_users(&dots[5], &dots, &teams).is_empty());
+        assert_eq!(agent_payload(&dots[5], vec![])["usuarios"], json!([]));
     }
 
     #[test]

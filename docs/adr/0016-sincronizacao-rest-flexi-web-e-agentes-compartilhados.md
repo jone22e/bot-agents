@@ -23,7 +23,8 @@ interruptor "Compartilhar no Flexi" e a lista de usuarios ficam no perfil do DOT
 
 Tarefa de fundo `flexi_sync::run` (substitui `flexi_link`):
 - `PUT /app/agentes` no inicio e em `dots.changed`/`teams.changed` (e quando o usuario reordena as equipes,
-  `settings.changed` de `ui.teams_order`): lista dos DOTs compartilhados (id, nome, descricao, status, usuarios) e
+  `settings.changed` de `ui.teams_order`): lista de todos os DOTs nao arquivados (id, nome, descricao, status, usuarios;
+  `usuarios` so vem com "Compartilhar no Flexi" ligado: o dono ve todos os dele no Flexi, os outros so os compartilhados) e
   `equipes` (id, nome, gerente_id, membros, pai, na ordem do usuario) para o Flexi agrupar como a lista de contatos.
   O Flexi desativa (`ativo = 0`) o que saiu da lista.
 - `POST /app/sincronizar` a cada 4 s (ou na hora, por evento): `{versao, pendentes, dots, estados?, aprovacoes?,
