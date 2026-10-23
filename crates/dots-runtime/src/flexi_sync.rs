@@ -2,14 +2,15 @@
 //!
 //! O runtime so faz chamadas de saida, com a sessao da conta do usuario (`account.flexi_connection_id`):
 //! registra os DOTs compartilhados, busca a cada poucos segundos as mensagens e decisoes pendentes, responde
-//! pela conversa unica de cada DOT (tipo grupo) e devolve respostas, aprovacoes e desempenho. Nada entra na
-//! maquina: funciona num computador Ubuntu ligado 24 h sem porta aberta.
+//! pela conversa principal de cada DOT (a mesma que o app mostra; no Flexi e de grupo), espelha essa conversa
+//! inteira no Flexi e devolve respostas, aprovacoes e desempenho. Nada entra na maquina: funciona num
+//! computador Ubuntu ligado 24 h sem porta aberta.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dots_core::{AppConnection, Contact, Dot, DotStatus, DotsError, DotsResult, MessageRole, TaskStatus, Team, Timestamp};
+use dots_core::{AppConnection, Contact, Dot, DotStatus, DotsError, DotsResult, Message, MessageRole, TaskStatus, Team, Timestamp};
 use dots_flexi::{FlexiClient, FlexiError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -30,12 +31,19 @@ const PERFORMANCE_INTERVAL: Duration = Duration::from_secs(300);
 const PERFORMANCE_DEBOUNCE: Duration = Duration::from_secs(60);
 const APPROVALS_LIMIT: u32 = 100;
 const CONVERSATION_SCAN: u32 = 200;
+/// Quantas mensagens recentes da conversa principal vao ao Flexi na primeira vez que um DOT e espelhado.
+const MIRROR_BACKFILL: usize = 50;
+/// Cursor do espelho por DOT (`created_at` da ultima mensagem examinada), guardado para nao reler tudo a cada reinicio.
+const MIRROR_CURSORS_SETTING: &str = "flexi_sync.mirror_cursors";
 /// Evento interno (IPC `apps.flexi.link_reconnect`): sincroniza na hora.
 pub const RECONNECT_EVENT: &str = "flexi_link.reconnect";
 const REGISTRY_EVENTS: [&str; 2] = ["dots.changed", "teams.changed"];
 /// Ordem das equipes escolhida pelo usuario (mesma chave da lista de contatos do app): muda o agrupamento no Flexi.
 const TEAMS_ORDER_SETTING: &str = "ui.teams_order";
 const APPROVAL_EVENTS: [&str; 2] = ["approval.requested", "approval.resolved"];
+/// Avisos `dots_notify_user` ("X precisa de voce"): vao ao Flexi quando mudam.
+const NOTIFICATION_EVENT: &str = "notification.changed";
+const NOTIFICATIONS_LIMIT: u32 = 50;
 
 /// Estado da sincronizacao, em memoria, para a interface do app (`apps.flexi.link_status`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -88,6 +96,9 @@ struct SyncResponse {
     mensagens: Vec<InboxMessage>,
     #[serde(default)]
     decisoes: Vec<Decision>,
+    /// Avisos que o dono dispensou no Flexi web e o app ainda nao marcou como lidos.
+    #[serde(default)]
+    dispensadas: Vec<String>,
     /// O Flexi nao tem o registro desta versao (ex.: backend atualizado depois do nosso registro): manda tudo de novo.
     #[serde(default)]
     reenviar_registro: bool,
@@ -103,16 +114,32 @@ struct InFlight {
     last_pushed: Option<(String, String, String)>,
 }
 
+/// Espelho da conversa principal de um DOT no Flexi (a mesma conversa que o app mostra).
+#[derive(Debug, Clone, Default)]
+struct Mirror {
+    /// `created_at` da ultima mensagem examinada; as anteriores nao voltam a ser lidas.
+    cursor: Option<Timestamp>,
+    /// Mensagens enviadas ainda em andamento (resposta do DOT em streaming): ultimo (conteudo, estado, situacao).
+    open: HashMap<String, (String, String, String)>,
+}
+
 #[derive(Default)]
 struct SyncState {
     started: bool,
     registry_dirty: bool,
     approvals_dirty: bool,
+    notifications_dirty: bool,
     perf_dirty: bool,
     last_perf_push: Option<tokio::time::Instant>,
     /// Ultimo JSON de `estados` aceito pelo Flexi: so manda de novo quando algo mudou.
     last_states: Option<String>,
     inflight: HashMap<i64, InFlight>,
+    /// Espelho por DOT; `mirror_all` reexamina todos (inicio, registro, conversa nova), `mirror_dirty` so os avisados por evento.
+    mirror: HashMap<String, Mirror>,
+    mirror_all: bool,
+    mirror_dirty: HashSet<String>,
+    /// Conversa principal -> DOT, para `message.changed` acordar o espelho certo.
+    main_conversations: HashMap<String, String>,
 }
 
 enum SyncError {
@@ -234,6 +261,30 @@ pub fn flexi_message_id(metadata: &Value) -> Option<i64> {
     metadata.get("flexi").and_then(|f| f.get("mensagem_id")).and_then(Value::as_i64)
 }
 
+/// Texto da resposta do DOT: a mensagem, ou o erro/aviso quando terminou vazia.
+pub fn reply_content(m: &Message, done: bool) -> String {
+    if m.content.is_empty() && done {
+        m.metadata.get("error").and_then(Value::as_str).unwrap_or("A tarefa terminou sem resposta.").to_string()
+    } else {
+        m.content.clone()
+    }
+}
+
+/// Como uma mensagem da conversa principal vai ao Flexi: `(papel, conteudo, estado, terminou, acoes)`.
+/// `None` para o que nao e espelhado: chamadas de ferramenta e mensagens que ja nasceram no Flexi.
+pub fn mirror_payload(m: &Message) -> Option<(&'static str, String, &'static str, bool, Vec<String>)> {
+    match m.role {
+        MessageRole::Tool => None,
+        MessageRole::User if flexi_message_id(&m.metadata).is_some() => None,
+        MessageRole::User => Some(("usuario", m.content.clone(), "concluida", true, vec![])),
+        MessageRole::System => Some(("sistema", m.content.clone(), "concluida", true, vec![])),
+        MessageRole::Dot => {
+            let (estado, done) = reply_state(&m.metadata);
+            Some(("agente", reply_content(m, done), estado, done, reply_actions(&m.metadata)))
+        }
+    }
+}
+
 fn task_is_terminal(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled)
 }
@@ -319,21 +370,24 @@ impl RuntimeService {
             .await
     }
 
-    /// Conversa unica do DOT com o Flexi; cria na primeira mensagem.
+    /// Conversa do DOT com o Flexi: a principal, a mesma que o app mostra (cria se o DOT ainda nao tem nenhuma).
     async fn flexi_conversation_for(&self, dot_id: &str) -> DotsResult<String> {
         let d = dot_id.to_string();
+        self.storage.call(move |s| s.conversations().main(&d).map(|c| c.id)).await
+    }
+
+    /// Cursores do espelho da conversa guardados entre reinicios.
+    async fn mirror_cursors(&self) -> HashMap<String, Timestamp> {
         self.storage
-            .call(move |s| {
-                if let Some(id) = s.dots().flexi_conversation(&d)? {
-                    if s.conversations().get(&id).is_ok() {
-                        return Ok(id);
-                    }
-                }
-                let conv = s.conversations().create(&d, "Flexi")?;
-                s.dots().set_flexi_conversation(&d, Some(&conv.id))?;
-                Ok(conv.id)
-            })
+            .call(|s| Ok(s.settings().get(MIRROR_CURSORS_SETTING)?.and_then(|st| serde_json::from_value(st.value).ok()).unwrap_or_default()))
             .await
+            .unwrap_or_default()
+    }
+
+    async fn save_mirror_cursors(&self, cursors: HashMap<String, Timestamp>) {
+        if let Err(e) = self.storage.call(move |s| s.settings().set(MIRROR_CURSORS_SETTING, &json!(cursors)).map(|_| ())).await {
+            tracing::warn!(error = %e, "cursores do espelho da conversa nao foram guardados");
+        }
     }
 
     /// Usuarios da base da conta do usuario, para escolher com quem compartilhar um DOT (IPC `apps.flexi.users`).
@@ -396,8 +450,7 @@ async fn start_message(svc: &RuntimeService, client: &FlexiClient, st: &mut Sync
 
 /// Depois de um reinicio, reencontra a tarefa de uma mensagem que ja estava "processando".
 async fn recover_message(svc: &RuntimeService, st: &mut SyncState, msg: &InboxMessage) -> DotsResult<bool> {
-    let dot_id = msg.agente_id.clone();
-    let Some(cid) = svc.storage.call(move |s| s.dots().flexi_conversation(&dot_id)).await.ok().flatten() else { return Ok(false) };
+    let cid = svc.flexi_conversation_for(&msg.agente_id).await?;
     let msgs = svc.storage.call({ let c = cid.clone(); move |s| s.conversations().messages(&c, CONVERSATION_SCAN) }).await?;
     let Some(task_id) = msgs.iter().rev().find(|m| m.role == MessageRole::User && flexi_message_id(&m.metadata) == Some(msg.id)).and_then(|m| m.metadata.get("task_id").and_then(Value::as_str).map(String::from)) else {
         return Ok(false);
@@ -419,8 +472,7 @@ async fn push_progress(svc: &RuntimeService, client: &FlexiClient, st: &mut Sync
         let (dots_message_id, content, estado, done, acoes) = match (reply, task.as_ref()) {
             (Some(m), _) => {
                 let (estado, done) = reply_state(&m.metadata);
-                let content = if m.content.is_empty() && done { m.metadata.get("error").and_then(Value::as_str).unwrap_or("A tarefa terminou sem resposta.").to_string() } else { m.content.clone() };
-                (m.id.clone(), content, estado, done, reply_actions(&m.metadata))
+                (m.id.clone(), reply_content(m, done), estado, done, reply_actions(&m.metadata))
             }
             (None, Some(t)) if task_is_terminal(t.status) => {
                 let content = t.result_text.clone().filter(|r| !r.is_empty()).or_else(|| t.error.clone()).unwrap_or_else(|| "A tarefa terminou sem resposta.".into());
@@ -453,10 +505,79 @@ async fn push_progress(svc: &RuntimeService, client: &FlexiClient, st: &mut Sync
     Ok(())
 }
 
+/// Espelha no Flexi a conversa principal dos DOTs (a mesma do app): mensagens do usuario, do DOT e de sistema,
+/// com upsert por `dots_message_id`. O que nasceu no Flexi ja esta la, e as respostas a mensagens do Flexi em
+/// andamento ficam com `push_progress`. Na primeira vez de cada DOT vao so as `MIRROR_BACKFILL` mais recentes.
+async fn push_mirror(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -> Result<(), SyncError> {
+    let dots = svc.flexi_shared_dots().await?;
+    let targets: Vec<String> = if st.mirror_all {
+        dots.iter().map(|d| d.id.clone()).collect()
+    } else {
+        let mut t: Vec<String> = st.mirror_dirty.iter().cloned().collect();
+        t.extend(st.mirror.iter().filter(|(_, m)| !m.open.is_empty()).map(|(id, _)| id.clone()));
+        t.sort();
+        t.dedup();
+        t.retain(|id| dots.iter().any(|d| &d.id == id));
+        t
+    };
+    let inflight_tasks: HashSet<String> = st.inflight.values().map(|f| f.task_id.clone()).collect();
+    let mut cursors_changed = false;
+    for dot_id in targets {
+        let conv = svc.storage.call({ let d = dot_id.clone(); move |s| Ok(s.conversations().list(Some(&d))?.into_iter().min_by_key(|c| c.created_at)) }).await?;
+        let Some(conv) = conv else { continue };
+        st.main_conversations.insert(conv.id.clone(), dot_id.clone());
+        let msgs = svc.storage.call({ let c = conv.id.clone(); move |s| s.conversations().messages(&c, CONVERSATION_SCAN) }).await?;
+        let mirror = st.mirror.entry(dot_id.clone()).or_default();
+        let candidates: Vec<Message> = match mirror.cursor {
+            None => msgs.iter().skip(msgs.len().saturating_sub(MIRROR_BACKFILL)).cloned().collect(),
+            Some(cursor) => msgs.iter().filter(|m| m.created_at > cursor || mirror.open.contains_key(&m.id)).cloned().collect(),
+        };
+        for m in candidates {
+            let inflight = m.role == MessageRole::Dot && m.task_id.as_deref().is_some_and(|t| inflight_tasks.contains(t));
+            if let Some((papel, conteudo, estado, done, acoes)) = mirror_payload(&m).filter(|_| !inflight) {
+                let situacao = match (&m.task_id, done) {
+                    (Some(t), false) => svc.storage.call({ let t = t.clone(); move |s| s.tasks().get(&t) }).await.map(|t| t.status.as_str().to_string()).unwrap_or_default(),
+                    _ => String::new(),
+                };
+                let key = (conteudo.clone(), estado.to_string(), situacao.clone());
+                if mirror.open.get(&m.id) != Some(&key) {
+                    let body = json!({
+                        "agente_id": dot_id,
+                        "dots_message_id": m.id,
+                        "papel": papel,
+                        "conteudo": conteudo,
+                        "estado": estado,
+                        "situacao": situacao,
+                        "acoes": acoes,
+                        "criada_em": m.created_at,
+                    });
+                    client.call("POST", &path("/mensagens"), None, Some(&body)).await?;
+                    if done {
+                        mirror.open.remove(&m.id);
+                    } else {
+                        mirror.open.insert(m.id.clone(), key);
+                    }
+                }
+            }
+            if mirror.cursor.map_or(true, |c| m.created_at > c) {
+                mirror.cursor = Some(m.created_at);
+                cursors_changed = true;
+            }
+        }
+    }
+    st.mirror_all = false;
+    st.mirror_dirty.clear();
+    if cursors_changed {
+        svc.save_mirror_cursors(st.mirror.iter().filter_map(|(id, m)| m.cursor.map(|c| (id.clone(), c))).collect()).await;
+    }
+    Ok(())
+}
+
 async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -> Result<(), SyncError> {
     if !st.started || st.registry_dirty {
         register_agents(svc, client).await?;
         st.registry_dirty = false;
+        st.mirror_all = true;
     }
 
     let (pending, dots) = svc.flexi_sync_counts().await?;
@@ -472,6 +593,11 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         let approvals = svc.storage.call(|s| s.approvals().list(false, APPROVALS_LIMIT)).await?;
         body["aprovacoes"] = json!(approvals);
     }
+    // Avisos pendentes, a lista inteira: o Flexi marca como lido o que saiu dela.
+    if !st.started || st.notifications_dirty {
+        let notifications = svc.storage.call(|s| s.notifications().list(true, NOTIFICATIONS_LIMIT)).await?;
+        body["notificacoes"] = json!(notifications);
+    }
     let perf_due = match st.last_perf_push {
         None => true,
         Some(t) => t.elapsed() >= PERFORMANCE_INTERVAL || (st.perf_dirty && t.elapsed() >= PERFORMANCE_DEBOUNCE),
@@ -483,6 +609,7 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
     // So depois do aceite: um erro de rede deixa os dados para a proxima rodada.
     st.started = true;
     st.approvals_dirty = false;
+    st.notifications_dirty = false;
     if states_due {
         st.last_states = Some(states_json);
     }
@@ -495,6 +622,16 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         tracing::info!("Flexi pediu o registro dos DOTs de novo; reenviando agentes, equipes e estados na proxima rodada");
         st.registry_dirty = true;
         st.last_states = None;
+        st.notifications_dirty = true;
+    }
+
+    // Avisos dispensados no Flexi web: o mesmo efeito de clicar no balao do app.
+    for id in &resp.dispensadas {
+        let cleared = svc.storage.call({ let id = id.clone(); move |s| s.notifications().clear(Some(&id)) }).await?;
+        if cleared > 0 {
+            svc.events.emit(NOTIFICATION_EVENT, json!({ "cleared": cleared, "id": id, "via": "flexi" }));
+        }
+        client.call("POST", &path(&format!("/notificacoes/{id}/aplicada")), None, None).await?;
     }
 
     for d in &resp.decisoes {
@@ -528,7 +665,8 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         }
     }
 
-    push_progress(svc, client, st).await
+    push_progress(svc, client, st).await?;
+    push_mirror(svc, client, st).await
 }
 
 /// Espera o proximo ciclo: `POLL_INTERVAL` ou um evento que mude o que o Flexi precisa ver, o que vier primeiro.
@@ -545,6 +683,7 @@ async fn wait_tick(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::
                 Ok(ev) if REGISTRY_EVENTS.contains(&ev.event.as_str()) => { st.registry_dirty = true; return }
                 Ok(ev) if ev.event == "settings.changed" && ev.payload.get("key").and_then(Value::as_str) == Some(TEAMS_ORDER_SETTING) => { st.registry_dirty = true; return }
                 Ok(ev) if APPROVAL_EVENTS.contains(&ev.event.as_str()) => { st.approvals_dirty = true; return }
+                Ok(ev) if ev.event == NOTIFICATION_EVENT => { st.notifications_dirty = true; return }
                 Ok(ev) if ev.event == "task.changed" => {
                     let id = ev.payload.get("id").and_then(Value::as_str).unwrap_or("");
                     let status = ev.payload.get("status").and_then(Value::as_str).unwrap_or("");
@@ -554,8 +693,14 @@ async fn wait_tick(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::
                 }
                 Ok(ev) if ev.event == "message.changed" => {
                     let cid = ev.payload.get("conversation_id").and_then(Value::as_str).unwrap_or("");
+                    if let Some(dot_id) = st.main_conversations.get(cid) {
+                        st.mirror_dirty.insert(dot_id.clone());
+                        return;
+                    }
                     if st.inflight.values().any(|f| f.conversation_id == cid) { return }
                 }
+                // Conversa criada ou apagada: a principal de algum DOT pode ter mudado.
+                Ok(ev) if ev.event == "conversation.changed" => { st.mirror_all = true; return }
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
@@ -568,6 +713,7 @@ async fn wait_tick(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::
 pub async fn run(svc: Arc<RuntimeService>) {
     let mut rx = svc.events.subscribe();
     let mut st = SyncState::default();
+    st.mirror = svc.mirror_cursors().await.into_iter().map(|(id, c)| (id, Mirror { cursor: Some(c), open: HashMap::new() })).collect();
     let mut backoff = BACKOFF_MIN;
     let mut last_cycle: Option<tokio::time::Instant> = None;
     loop {
@@ -646,6 +792,24 @@ mod tests {
         assert!(reply_actions(&json!({})).is_empty());
     }
 
+    fn conv_msg(role: MessageRole, content: &str, metadata: Value) -> Message {
+        Message { id: "m1".into(), conversation_id: "c1".into(), role, content: content.into(), task_id: Some("t1".into()), execution_id: None, metadata, created_at: dots_core::now() }
+    }
+
+    #[test]
+    fn espelho_leva_usuario_dot_e_sistema_e_pula_ferramentas_e_o_que_veio_do_flexi() {
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::User, "oi", json!({}))), Some(("usuario", "oi".to_string(), "concluida", true, vec![])));
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::System, "Gatilho: pedido", json!({ "origin": "event" }))), Some(("sistema", "Gatilho: pedido".to_string(), "concluida", true, vec![])));
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::Tool, "x", json!({}))), None);
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::User, "Ana (pelo Flexi): oi", json!({ "flexi": { "mensagem_id": 3 } }))), None);
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": true }))), Some(("agente", String::new(), "processando", false, vec![])));
+        assert_eq!(
+            mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": false, "status": "failed", "error": "deu ruim", "tools": ["a"] }))),
+            Some(("agente", "deu ruim".to_string(), "erro", true, vec!["a".to_string()]))
+        );
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::Dot, "pronto", json!({ "streaming": false, "status": "completed" }))), Some(("agente", "pronto".to_string(), "concluida", true, vec![])));
+    }
+
     #[test]
     fn le_id_da_mensagem_do_flexi_nos_metadados() {
         assert_eq!(flexi_message_id(&json!({ "flexi": { "mensagem_id": 42 }, "task_id": "t" })), Some(42));
@@ -656,12 +820,14 @@ mod tests {
     fn interpreta_resposta_da_sincronizacao() {
         let r: SyncResponse = serde_json::from_value(json!({
             "mensagens": [{ "id": 1, "agente_id": "d", "usuario_id": 9, "autor_nome": "Ana", "conteudo": "oi", "estado": "enviada" }],
-            "decisoes": [{ "id": "ap-1", "aprovado": false, "motivo": "nao agora" }]
+            "decisoes": [{ "id": "ap-1", "aprovado": false, "motivo": "nao agora" }],
+            "dispensadas": ["n-1"]
         }))
         .unwrap();
         assert_eq!(r.mensagens.len(), 1);
         assert_eq!(r.mensagens[0].autor_nome, "Ana");
         assert_eq!(r.decisoes[0], Decision { id: "ap-1".into(), aprovado: false, motivo: Some("nao agora".into()) });
+        assert_eq!(r.dispensadas, vec!["n-1".to_string()]);
         let vazio: SyncResponse = serde_json::from_value(json!({ "status": 1 })).unwrap();
         assert!(vazio.mensagens.is_empty() && vazio.decisoes.is_empty() && !vazio.reenviar_registro);
         let pede: SyncResponse = serde_json::from_value(json!({ "status": 1, "reenviar_registro": true })).unwrap();

@@ -52,6 +52,28 @@ usuario ve), `agentes`, `agentes/:id/mensagens` (`?desde=` devolve so o que mudo
 "Agentes DOTS" do TaskDock lista os agentes compartilhados e abre a conversa; as abas Aprovacoes e Desempenho so
 aparecem para o dono. "Conectado" = ultimo contato do app ha menos de 90 s.
 
+### Conversa unica com o app (2026-10-23)
+A conversa do Flexi deixou de ser uma conversa separada ("Flexi") e passou a ser a **principal** do DOT
+(`conversations().main`), a mesma que o app desktop mostra; a coluna `dots.flexi_conversation_id` ficou sem uso.
+Alem das respostas as mensagens do Flexi, `flexi_sync` **espelha a conversa principal inteira** de cada DOT nao
+arquivado (`push_mirror`): mensagens do usuario (`papel = usuario`, com o dono como autor), do DOT (`agente`, com
+streaming) e as notas de origem (`sistema`), pelo mesmo `POST /app/mensagens` com upsert por `dots_message_id`,
+agora com `papel`, `autor_nome` e `criada_em`. Chamadas de ferramenta e mensagens que nasceram no Flexi nao vao. Na
+primeira vez de cada DOT vao so as 50 mais recentes; o cursor por DOT fica em `flexi_sync.mirror_cursors` para nao
+reler a conversa a cada reinicio. O evento `message.changed` da conversa principal sincroniza na hora; respostas em
+streaming sao reenviadas a cada ciclo ate terminar. No Flexi, uma mensagem `usuario` ou `sistema` vinda do app
+entra sempre `concluida` (uma `usuario` pendente seria entregue de volta ao DOT).
+
+### Avisos "precisa de voce" (2026-10-23)
+Os avisos de `dots_notify_user` (balao "X precisa de voce" no app) tambem vao ao Flexi: `POST /app/sincronizar` leva
+`notificacoes` (a lista inteira de pendentes) no inicio, quando o Flexi pede o registro de novo e a cada
+`notification.changed`; o Flexi guarda em `agentes_dots_notificacoes` (migracao `20270312_agentes_dots_notificacoes.sql`)
+e marca como `cleared` o que saiu da lista. No Flexi web o dono ve uma faixa no topo do painel, uma linha por
+agente com o primeiro aviso e "+N", e o botao com a acao abre a conversa e dispensa os avisos (`GET /notificacoes`,
+`POST /notificacoes/:id/dispensar`). A dispensa volta na resposta da sincronizacao (`dispensadas`); o app limpa o aviso
+como se o usuario tivesse clicado no balao e confirma com `POST /app/notificacoes/:id/aplicada`. Como no app, so o
+dono ve os avisos.
+
 ## Consequencias
 - Funciona atras de qualquer rede e com o Flexi em blue/green: nao ha conexao persistente para cair.
 - A conversa de cada agente compartilhado fica no banco do Flexi; o DOT ve quem falou. A conversa e de grupo: todos
