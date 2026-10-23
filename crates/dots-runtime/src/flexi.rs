@@ -327,7 +327,11 @@ impl RuntimeService {
             // Flexi fora do ar ou erro de rede: segue com o cookie guardado; a propria pagina mostrara o problema.
             Err(e) => tracing::warn!(connection = %conn.id, error = %e, "navegador: nao foi possivel conferir a sessao do Flexi"),
         }
-        let Some(cookie) = self.flexi.secrets.get(&FlexiRegistry::cookie_key(&conn.id)) else { return Ok(false) };
+        // O cookie vem do cliente HTTP em memoria (acabou de ser conferido/renovado); o cofre e so reserva.
+        let Some(cookie) = client.session_cookie().or_else(|| self.flexi.secrets.get(&FlexiRegistry::cookie_key(&conn.id))) else {
+            tracing::warn!(connection = %conn.id, "navegador: conexao do Flexi sem cookie de sessao; a pagina abrira deslogada");
+            return Ok(false);
+        };
         browser.set_cookie("userdata", &cookie, &conn.base_url).await?;
         Ok(true)
     }
