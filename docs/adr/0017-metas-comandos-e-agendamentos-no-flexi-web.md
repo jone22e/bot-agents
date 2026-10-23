@@ -39,7 +39,9 @@ tarefas periodicas, modelo da IA) e a saida da aba Desempenho do Flexi.
   das colunas `timestamp` por `at time zone current_setting('TimeZone')` e gravacao de datas do app por
   `::timestamptz`. Painel so com agentes (sem abas); botao direito no agente abre o menu; metas em cartao visual
   (anel, ritmo esperado, projecao, ultimos 7 dias; `listarMetas` nao devolve as canceladas, so ativas e
-  concluidas); so o dono troca modelo, pausa e mexe nas tarefas periodicas.
+  concluidas); so o dono troca modelo, pausa e mexe nas tarefas periodicas. Perguntas do DOT (`dots_ask_user`,
+  aprovacao `kind: question`) aparecem como cartao na conversa, so para o dono, com opcoes, resposta livre e
+  "Pular" (`POST /aprovacoes/:id/decidir`; o app entrega a resposta ao DOT no ciclo seguinte).
 
 ## Consequencias
 - O historico antigo no Flexi so e corrigido para as 50 mensagens mais recentes de cada DOT (reenvio unico).
