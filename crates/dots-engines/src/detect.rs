@@ -84,7 +84,7 @@ pub async fn detect_one(kind: EngineKind, override_path: Option<&str>, opts: &De
     }
     det.capabilities = capabilities(kind);
     det.models = match kind {
-        EngineKind::Codex => crate::models::codex_models(&opts.home),
+        EngineKind::Codex => crate::models::codex_models(&exe, opts).await,
         EngineKind::Agy => crate::models::agy_models(&exe, opts).await,
         EngineKind::Claude => vec![],
     };

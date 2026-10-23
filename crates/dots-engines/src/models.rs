@@ -1,11 +1,13 @@
-//! Lista de modelos que cada CLI informa (mesma origem usada pelo ovrgit):
-//! - Codex: `~/.codex/models_cache.json`, que o proprio CLI baixa e mantem.
+//! Lista de modelos que cada CLI informa:
+//! - Codex: cache local; se vazio, `codex app-server` (`model/list`).
 //! - AGY: saida de `agy models` (uma linha `id<TAB>nome` por modelo).
 //! O Claude Code nao lista modelos; a lista dele fica na interface.
 
 use std::path::{Path, PathBuf};
 
 use dots_core::EngineModel;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
 
 use crate::detect::DetectOptions;
 use crate::process::run_command;
@@ -49,10 +51,68 @@ fn codex_cache_path(home: &Path) -> PathBuf {
     }
 }
 
-/// Catalogo do Codex, na ordem do app (`priority`), sem os ocultos (`visibility: "hide"`).
-pub fn codex_models(home: &Path) -> Vec<EngineModel> {
+/// Catalogo local do Codex, na ordem do app (`priority`), sem os ocultos.
+fn codex_cached_models(home: &Path) -> Vec<EngineModel> {
     let Ok(raw) = std::fs::read_to_string(codex_cache_path(home)) else { return vec![] };
     parse_codex_cache(&raw)
+}
+
+/// Consulta o catalogo pelo protocolo do proprio Codex quando o cache nao esta disponivel.
+async fn codex_app_server_models(exe: &Path, opts: &DetectOptions) -> Vec<EngineModel> {
+    let Ok(path) = std::env::join_paths(&opts.dirs) else { return vec![] };
+    let Ok(mut child) = Command::new(exe)
+        .arg("app-server")
+        .env("HOME", &opts.home)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn() else { return vec![] };
+    let Some(mut input) = child.stdin.take() else { return vec![] };
+    let Some(output) = child.stdout.take() else { return vec![] };
+    let mut lines = BufReader::new(output).lines();
+    let exchange = async {
+        if input.write_all(b"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"dots\",\"version\":\"0.0.0\"}}}\n").await.is_err() {
+            return vec![];
+        }
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+            match value.get("id").and_then(|id| id.as_u64()) {
+                Some(1) if value.get("result").is_some() => {
+                    if input.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n{\"id\":2,\"method\":\"model/list\",\"params\":{\"includeHidden\":false,\"limit\":1000}}\n").await.is_err() {
+                        return vec![];
+                    }
+                }
+                Some(1) => return vec![],
+                Some(2) => return parse_codex_app_server_models(&value),
+                _ => {}
+            }
+        }
+        vec![]
+    };
+    let models = tokio::time::timeout(opts.timeout, exchange).await.unwrap_or_default();
+    let _ = child.kill().await;
+    models
+}
+
+pub async fn codex_models(exe: &Path, opts: &DetectOptions) -> Vec<EngineModel> {
+    let cached = codex_cached_models(&opts.home);
+    if cached.is_empty() { codex_app_server_models(exe, opts).await } else { cached }
+}
+
+fn parse_codex_app_server_models(value: &serde_json::Value) -> Vec<EngineModel> {
+    value.get("result").and_then(|result| result.get("data")).and_then(|data| data.as_array())
+        .into_iter().flatten()
+        .filter(|model| model.get("hidden").and_then(|hidden| hidden.as_bool()) != Some(true))
+        .filter_map(|model| {
+            let id = model.get("model")?.as_str()?.trim();
+            if id.is_empty() { return None }
+            let display = model.get("displayName").and_then(|name| name.as_str()).unwrap_or(id);
+            let description = model.get("description").and_then(|value| value.as_str()).map(describe_codex);
+            Some(EngineModel { id: id.to_string(), label: codex_label(display), description })
+        })
+        .collect()
 }
 
 pub fn parse_codex_cache(raw: &str) -> Vec<EngineModel> {
@@ -125,6 +185,21 @@ mod tests {
         assert_eq!(codex_label("GPT-Reserve"), "GPT-Reserve");
         assert_eq!(codex_label("Codex Auto Review"), "Codex Auto Review");
         assert_eq!(codex_label("GPT-5.6-Terra"), "GPT-5.6 Terra");
+    }
+
+    #[tokio::test]
+    async fn codex_lists_models_without_a_cache_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("codex");
+        std::fs::write(&exe, "#!/bin/sh\nread -r line || exit 1\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread -r line || exit 1\nread -r line || exit 1\nprintf '%s\\n' '{\"id\":2,\"result\":{\"data\":[{\"model\":\"gpt-5.6-terra\",\"displayName\":\"GPT-5.6-Terra\",\"description\":\"Modelo disponivel.\",\"hidden\":false},{\"model\":\"hidden\",\"hidden\":true}]}}'\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = DetectOptions { home: dir.path().to_path_buf(), dirs: vec![dir.path().to_path_buf()], timeout: std::time::Duration::from_secs(2) };
+        let models = codex_models(&exe, &opts).await;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-terra");
+        assert_eq!(models[0].label, "GPT-5.6 Terra");
     }
 
     #[test]
