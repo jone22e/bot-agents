@@ -78,7 +78,7 @@ async function save() {
   <section class="card space-y-3" data-testid="flexi-share">
     <h3 class="text-sm font-semibold text-zinc-200">Compartilhar no Flexi</h3>
     <ErrorBanner :message="error" />
-    <Toggle v-model="enabled" label="Compartilhar este DOT no Flexi web" description="Os usuários escolhidos veem o DOT no Flexi e conversam com ele numa conversa única, como um grupo. Desligado, o DOT é só seu." />
+    <Toggle v-model="enabled" label="Compartilhar este DOT no Flexi web" description="Os usuários escolhidos veem o DOT no Flexi e conversam com ele numa conversa única, como um grupo. Se este DOT é gerente, os funcionários da equipe dele ficam compartilhados com as mesmas pessoas. Desligado, só você vê o DOT no Flexi." />
     <template v-if="enabled">
       <p class="text-xs text-zinc-500">Quem pode falar com este DOT pelo Flexi. As aprovações continuam com você.</p>
       <div v-if="selected.length" class="flex flex-wrap gap-1.5">
