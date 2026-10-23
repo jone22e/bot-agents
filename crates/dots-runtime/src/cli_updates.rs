@@ -1,8 +1,8 @@
 //! Versao instalada de cada CLI (claude, codex, agy) e a mais recente publicada (copiado do ovrgit):
-//! - Claude e Codex: a versao `latest` do pacote no npm (a mesma que o instalador de cada um usa).
+//! - Claude e Codex: a versao `latest` do pacote no npm.
 //! - Antigravity: a raiz do servidor de atualizacoes do proprio CLI responde "Stable Version: x.y.z".
-//! Para atualizar, roda o comando `update` do proprio CLI. Para instalar, o instalador oficial de cada um
-//! (o mesmo do site: executavel proprio em ~/.local/bin, sem Node nem Homebrew).
+//! Para atualizar, roda o comando `update` do proprio CLI. Para instalar, usa os pacotes oficiais
+//! em ~/.local/bin, sem Node nem Homebrew.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -54,12 +54,39 @@ fn npm_package(kind: EngineKind) -> Option<&'static str> {
 
 const AGY_UPDATER: &str = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app";
 
-/// Instaladores oficiais (script para macOS/Linux).
+/// Instaladores oficiais que ainda disponibilizam um script.
 fn installer(kind: EngineKind) -> &'static str {
     match kind {
         EngineKind::Claude => "https://claude.ai/install.sh",
         EngineKind::Codex => "https://chatgpt.com/codex/install.sh",
         EngineKind::Agy => "https://antigravity.google/cli/install.sh",
+    }
+}
+
+/// O script anunciado para Codex responde 404; o release oficial inclui o binario Linux.
+fn codex_linux_install_script() -> &'static str {
+    r#"set -euo pipefail
+case "$(uname -m)" in
+  x86_64) target=x86_64-unknown-linux-musl ;;
+  aarch64|arm64) target=aarch64-unknown-linux-musl ;;
+  *) echo "Arquitetura Linux nao suportada pelo instalador do Codex." >&2; exit 1 ;;
+esac
+archive="codex-$target.tar.gz"
+binary="codex-$target"
+tmp=$(mktemp -d)
+trap 'rm -r "$tmp"' EXIT
+curl -fsSL "https://github.com/openai/codex/releases/latest/download/$archive" -o "$tmp/$archive"
+tar -xzf "$tmp/$archive" -C "$tmp" "$binary"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$tmp/$binary" "$HOME/.local/bin/codex"
+"#
+}
+
+fn install_script(kind: EngineKind) -> String {
+    if kind == EngineKind::Codex && cfg!(target_os = "linux") {
+        codex_linux_install_script().to_string()
+    } else {
+        format!("set -o pipefail; CODEX_NON_INTERACTIVE=1 curl -fsSL {} | bash", installer(kind))
     }
 }
 
@@ -139,7 +166,7 @@ impl RuntimeService {
 
     /// Instala o CLI pelo instalador oficial, sem perguntas, e devolve a situacao depois dele.
     pub async fn cli_install(&self, kind: EngineKind) -> DotsResult<Option<CliUpdateInfo>> {
-        let script = format!("CODEX_NON_INTERACTIVE=1 curl -fsSL {} | bash", installer(kind));
+        let script = install_script(kind);
         let out = dots_engines::run_command(Path::new("/bin/bash"), &["-c", &script], &self.home, &self.path_dirs, Duration::from_secs(10 * 60)).await?;
         let after = self.check(kind).await;
         self.remember(kind, after.clone()).await;
