@@ -88,6 +88,9 @@ struct SyncResponse {
     mensagens: Vec<InboxMessage>,
     #[serde(default)]
     decisoes: Vec<Decision>,
+    /// O Flexi nao tem o registro desta versao (ex.: backend atualizado depois do nosso registro): manda tudo de novo.
+    #[serde(default)]
+    reenviar_registro: bool,
 }
 
 /// Mensagem em andamento: a tarefa que responde a mensagem `id` do Flexi.
@@ -488,6 +491,11 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         st.last_perf_push = Some(tokio::time::Instant::now());
     }
     let resp: SyncResponse = serde_json::from_value(resp).map_err(|e| SyncError::Failed(format!("resposta inesperada do Flexi: {e}")))?;
+    if resp.reenviar_registro && !st.registry_dirty {
+        tracing::info!("Flexi pediu o registro dos DOTs de novo; reenviando agentes, equipes e estados na proxima rodada");
+        st.registry_dirty = true;
+        st.last_states = None;
+    }
 
     for d in &resp.decisoes {
         let body = match svc.apply_flexi_decision(d).await {
@@ -655,7 +663,9 @@ mod tests {
         assert_eq!(r.mensagens[0].autor_nome, "Ana");
         assert_eq!(r.decisoes[0], Decision { id: "ap-1".into(), aprovado: false, motivo: Some("nao agora".into()) });
         let vazio: SyncResponse = serde_json::from_value(json!({ "status": 1 })).unwrap();
-        assert!(vazio.mensagens.is_empty() && vazio.decisoes.is_empty());
+        assert!(vazio.mensagens.is_empty() && vazio.decisoes.is_empty() && !vazio.reenviar_registro);
+        let pede: SyncResponse = serde_json::from_value(json!({ "status": 1, "reenviar_registro": true })).unwrap();
+        assert!(pede.reenviar_registro);
     }
 
     #[test]
