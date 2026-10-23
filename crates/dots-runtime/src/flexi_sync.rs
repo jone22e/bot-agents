@@ -3,14 +3,15 @@
 //! O runtime so faz chamadas de saida, com a sessao da conta do usuario (`account.flexi_connection_id`):
 //! registra os DOTs compartilhados, busca a cada poucos segundos as mensagens e decisoes pendentes, responde
 //! pela conversa principal de cada DOT (a mesma que o app mostra; no Flexi e de grupo), espelha essa conversa
-//! inteira no Flexi e devolve respostas, aprovacoes e desempenho. Nada entra na maquina: funciona num
-//! computador Ubuntu ligado 24 h sem porta aberta.
+//! inteira no Flexi e devolve respostas, aprovacoes, agendamentos e metas; aplica os comandos que o dono deu
+//! no Flexi web (modelo, pausa, agendamentos). Nada entra na maquina: funciona num computador Ubuntu ligado
+//! 24 h sem porta aberta.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dots_core::{AppConnection, Contact, Dot, DotStatus, DotsError, DotsResult, Message, MessageRole, TaskStatus, Team, Timestamp};
+use dots_core::{AppConnection, Contact, Dot, DotStatus, DotsError, DotsResult, EngineConfiguration, Message, MessageRole, Schedule, TaskStatus, Team, Timestamp};
 use dots_flexi::{FlexiClient, FlexiError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,15 +27,20 @@ const MIN_CYCLE_GAP: Duration = Duration::from_millis(700);
 const IDLE_RETRY: Duration = Duration::from_secs(30);
 const BACKOFF_MIN: u64 = 5;
 const BACKOFF_MAX: u64 = 60;
-/// Desempenho vai a cada 5 min, ou 60 s depois de uma tarefa terminar.
-const PERFORMANCE_INTERVAL: Duration = Duration::from_secs(300);
-const PERFORMANCE_DEBOUNCE: Duration = Duration::from_secs(60);
 const APPROVALS_LIMIT: u32 = 100;
 const CONVERSATION_SCAN: u32 = 200;
 /// Quantas mensagens recentes da conversa principal vao ao Flexi na primeira vez que um DOT e espelhado.
 const MIRROR_BACKFILL: usize = 50;
 /// Cursor do espelho por DOT (`created_at` da ultima mensagem examinada), guardado para nao reler tudo a cada reinicio.
 const MIRROR_CURSORS_SETTING: &str = "flexi_sync.mirror_cursors";
+/// Versao do formato do espelho. Quando muda, os cursores zeram uma vez e as `MIRROR_BACKFILL` mensagens mais
+/// recentes de cada DOT sao reenviadas (o Flexi faz upsert e corrige papel, autor, origem e data).
+/// 2 (2026-10-23): papel, autor, origem, detalhe e data original das mensagens; estado da resposta corrigido.
+const MIRROR_VERSION: u32 = 2;
+const MIRROR_VERSION_SETTING: &str = "flexi_sync.mirror_version";
+/// Agendamentos (`dots_schedule_*` e perfil do DOT) e metas (`dots_goal_*`): vao ao Flexi quando mudam.
+const AUTOMATION_EVENT: &str = "automation.changed";
+const GOAL_EVENT: &str = crate::goals::GOAL_EVENT;
 /// Evento interno (IPC `apps.flexi.link_reconnect`): sincroniza na hora.
 pub const RECONNECT_EVENT: &str = "flexi_link.reconnect";
 const REGISTRY_EVENTS: [&str; 2] = ["dots.changed", "teams.changed"];
@@ -90,6 +96,18 @@ pub struct Decision {
     pub motivo: Option<String>,
 }
 
+/// Comando que o dono deu no Flexi web (menu do agente), ainda nao aplicado aqui: `definir_modelo`
+/// (`dados.motor`, `dados.modelo`), `pausar`, `retomar`, `agendamento_ativar` (`dados.id`, `dados.ativo`) e
+/// `agendamento_cancelar` (`dados.id`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Command {
+    pub id: i64,
+    pub agente_id: String,
+    pub tipo: String,
+    #[serde(default)]
+    pub dados: Value,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct SyncResponse {
     #[serde(default)]
@@ -102,6 +120,9 @@ struct SyncResponse {
     /// O Flexi nao tem o registro desta versao (ex.: backend atualizado depois do nosso registro): manda tudo de novo.
     #[serde(default)]
     reenviar_registro: bool,
+    /// Comandos do dono dados no Flexi web, ainda nao aplicados.
+    #[serde(default)]
+    comandos: Vec<Command>,
 }
 
 /// Mensagem em andamento: a tarefa que responde a mensagem `id` do Flexi.
@@ -129,8 +150,10 @@ struct SyncState {
     registry_dirty: bool,
     approvals_dirty: bool,
     notifications_dirty: bool,
-    perf_dirty: bool,
-    last_perf_push: Option<tokio::time::Instant>,
+    /// Agendamentos mudaram (`automation.changed`): a lista inteira vai na proxima rodada.
+    schedules_dirty: bool,
+    /// Metas mudaram (`goal.changed`): a lista inteira vai na proxima rodada.
+    goals_dirty: bool,
     /// Ultimo JSON de `estados` aceito pelo Flexi: so manda de novo quando algo mudou.
     last_states: Option<String>,
     inflight: HashMap<i64, InFlight>,
@@ -191,6 +214,7 @@ pub fn shared_users(dot: &Dot, dots: &[Dot], teams: &[Team]) -> Vec<i64> {
 }
 
 /// O que o Flexi guarda de cada DOT: o dono ve todos os dele; `usuarios` sao os outros que tambem veem.
+/// `motor` e `modelo` sao o assistente e o modelo escolhidos para o DOT (vazio = padrao do motor).
 pub fn agent_payload(dot: &Dot, usuarios: Vec<i64>) -> Value {
     json!({
         "id": dot.id,
@@ -198,6 +222,40 @@ pub fn agent_payload(dot: &Dot, usuarios: Vec<i64>) -> Value {
         "descricao": dot.description,
         "status": dot.status.as_str(),
         "usuarios": usuarios,
+        "motor": dot.primary_engine.map(|e| e.as_str()),
+        "modelo": dot.model,
+    })
+}
+
+/// Motores configurados no app com o catalogo de modelos detectado, para o Flexi web oferecer "Definir modelo da IA".
+pub fn engines_payload(engines: &[EngineConfiguration]) -> Vec<Value> {
+    engines
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.kind.as_str(),
+                "nome": e.kind.display_name(),
+                "ativo": e.enabled && e.last_detection.as_ref().is_some_and(|d| d.installed),
+                "modelo_padrao": e.model,
+                "modelos": e.last_detection.as_ref().map(|d| d.models.iter().map(|m| json!({ "id": m.id, "nome": m.label })).collect::<Vec<_>>()).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Agendamento como o Flexi web o lista: texto legivel (`describe`), pedido, ativo e proximo/ultimo disparo.
+pub fn schedule_payload(s: &Schedule) -> Value {
+    json!({
+        "id": s.id,
+        "agente_id": s.dot_id,
+        "tipo": s.kind.as_str(),
+        "spec": s.spec,
+        "texto": crate::schedules::describe(s),
+        "pedido": s.prompt,
+        "ativo": s.enabled,
+        "proximo_em": s.next_run_at,
+        "ultimo_em": s.last_run_at,
+        "criado_em": s.created_at,
     })
 }
 
@@ -243,8 +301,9 @@ pub fn reply_state(metadata: &Value) -> (&'static str, bool) {
     if metadata.get("streaming").and_then(Value::as_bool).unwrap_or(false) {
         return ("processando", false);
     }
+    // O executor grava `ExecutionStatus::as_str()` ("COMPLETED", "FAILED"...): compara sem diferenciar maiusculas.
     match metadata.get("status").and_then(Value::as_str) {
-        Some("completed") => ("concluida", true),
+        Some(s) if s.eq_ignore_ascii_case("completed") => ("concluida", true),
         Some(_) => ("erro", true),
         // Mensagem sem metadados de execucao (motor ainda nao comecou): continua em andamento.
         None => ("processando", false),
@@ -270,17 +329,41 @@ pub fn reply_content(m: &Message, done: bool) -> String {
     }
 }
 
-/// Como uma mensagem da conversa principal vai ao Flexi: `(papel, conteudo, estado, terminou, acoes)`.
+/// Como uma mensagem da conversa principal vai ao Flexi.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirrorPayload {
+    pub papel: &'static str,
+    pub conteudo: String,
+    pub estado: &'static str,
+    pub done: bool,
+    pub acoes: Vec<String>,
+    /// Origem de uma nota de sistema (`metadata.origin` sem o id): `schedule`, `event`, `delegation`, `followup`,
+    /// `autonomy`, `goal`...; vazio nas demais.
+    pub origem: String,
+    /// Complemento da nota (`metadata.prompt`: o pedido agendado, a meta...); vazio nas demais.
+    pub detalhe: String,
+}
+
+/// Origem de uma nota de sistema sem o id (`schedule:abc` -> `schedule`).
+pub fn note_origin(metadata: &Value) -> String {
+    metadata.get("origin").and_then(Value::as_str).map(|o| o.split(':').next().unwrap_or("").trim().chars().take(40).collect()).unwrap_or_default()
+}
+
 /// `None` para o que nao e espelhado: chamadas de ferramenta e mensagens que ja nasceram no Flexi.
-pub fn mirror_payload(m: &Message) -> Option<(&'static str, String, &'static str, bool, Vec<String>)> {
+pub fn mirror_payload(m: &Message) -> Option<MirrorPayload> {
+    let plain = |papel: &'static str| MirrorPayload { papel, conteudo: m.content.clone(), estado: "concluida", done: true, acoes: vec![], origem: String::new(), detalhe: String::new() };
     match m.role {
         MessageRole::Tool => None,
         MessageRole::User if flexi_message_id(&m.metadata).is_some() => None,
-        MessageRole::User => Some(("usuario", m.content.clone(), "concluida", true, vec![])),
-        MessageRole::System => Some(("sistema", m.content.clone(), "concluida", true, vec![])),
+        MessageRole::User => Some(plain("usuario")),
+        MessageRole::System => Some(MirrorPayload {
+            origem: note_origin(&m.metadata),
+            detalhe: m.metadata.get("prompt").and_then(Value::as_str).map(|p| p.chars().take(4000).collect()).unwrap_or_default(),
+            ..plain("sistema")
+        }),
         MessageRole::Dot => {
             let (estado, done) = reply_state(&m.metadata);
-            Some(("agente", reply_content(m, done), estado, done, reply_actions(&m.metadata)))
+            Some(MirrorPayload { papel: "agente", conteudo: reply_content(m, done), estado, done, acoes: reply_actions(&m.metadata), origem: String::new(), detalhe: String::new() })
         }
     }
 }
@@ -376,16 +459,35 @@ impl RuntimeService {
         self.storage.call(move |s| s.conversations().main(&d).map(|c| c.id)).await
     }
 
-    /// Cursores do espelho da conversa guardados entre reinicios.
+    /// Cursores do espelho da conversa guardados entre reinicios. Se o formato do espelho mudou
+    /// (`MIRROR_VERSION`), zera os cursores uma vez: as mensagens recentes vao de novo e o Flexi as corrige.
     async fn mirror_cursors(&self) -> HashMap<String, Timestamp> {
-        self.storage
-            .call(|s| Ok(s.settings().get(MIRROR_CURSORS_SETTING)?.and_then(|st| serde_json::from_value(st.value).ok()).unwrap_or_default()))
+        let (cursors, version) = self
+            .storage
+            .call(|s| {
+                let cursors: HashMap<String, Timestamp> = s.settings().get(MIRROR_CURSORS_SETTING)?.and_then(|st| serde_json::from_value(st.value).ok()).unwrap_or_default();
+                let version = s.settings().get(MIRROR_VERSION_SETTING)?.and_then(|st| st.value.as_u64()).unwrap_or(1) as u32;
+                Ok((cursors, version))
+            })
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if version == MIRROR_VERSION {
+            return cursors;
+        }
+        tracing::info!(de = version, para = MIRROR_VERSION, "formato do espelho da conversa mudou; reenviando as mensagens recentes de cada DOT ao Flexi");
+        self.save_mirror_cursors(HashMap::new()).await;
+        HashMap::new()
     }
 
     async fn save_mirror_cursors(&self, cursors: HashMap<String, Timestamp>) {
-        if let Err(e) = self.storage.call(move |s| s.settings().set(MIRROR_CURSORS_SETTING, &json!(cursors)).map(|_| ())).await {
+        let r = self
+            .storage
+            .call(move |s| {
+                s.settings().set(MIRROR_CURSORS_SETTING, &json!(cursors))?;
+                s.settings().set(MIRROR_VERSION_SETTING, &json!(MIRROR_VERSION)).map(|_| ())
+            })
+            .await;
+        if let Err(e) = r {
             tracing::warn!(error = %e, "cursores do espelho da conversa nao foram guardados");
         }
     }
@@ -421,14 +523,62 @@ impl RuntimeService {
         let _ = self.storage.call(move |s| s.audit().record("user", "approval.decide_via_flexi_web", "approval", Some(&aid), json!({ "approved": approved, "kind": kind })).map(|_| ())).await;
         Ok(approval)
     }
+
+    /// Aplica um comando do Flexi web pelos mesmos IPCs do app (`dots.update`, `dots.pause`, `schedules.*`),
+    /// com auditoria. Devolve o que mudou, para o Flexi registrar.
+    async fn apply_flexi_command(&self, c: &Command) -> DotsResult<Value> {
+        let dot = self.storage.call({ let id = c.agente_id.clone(); move |s| s.dots().get(&id) }).await?;
+        if dot.status == DotStatus::Archived {
+            return Err(DotsError::Validation("este agente foi arquivado no app".into()));
+        }
+        let text = |k: &str| c.dados.get(k).and_then(Value::as_str).map(|v| v.trim().to_string()).unwrap_or_default();
+        let result = match c.tipo.as_str() {
+            "definir_modelo" => {
+                let mut patch = serde_json::Map::new();
+                let motor = text("motor");
+                if !motor.is_empty() {
+                    patch.insert("primary_engine".into(), json!(dots_core::EngineKind::parse(&motor)?.as_str()));
+                }
+                let modelo = text("modelo");
+                patch.insert("model".into(), if modelo.is_empty() { Value::Null } else { json!(modelo) });
+                let updated: Dot = serde_json::from_value(self.dispatch("dots.update", json!({ "id": c.agente_id, "patch": Value::Object(patch) })).await?).map_err(|e| DotsError::Internal(e.to_string()))?;
+                json!({ "motor": updated.primary_engine.map(|e| e.as_str()), "modelo": updated.model })
+            }
+            "pausar" | "retomar" => {
+                let method = if c.tipo == "pausar" { "dots.pause" } else { "dots.resume" };
+                let updated: Dot = serde_json::from_value(self.dispatch(method, json!({ "id": c.agente_id })).await?).map_err(|e| DotsError::Internal(e.to_string()))?;
+                json!({ "status": updated.status.as_str() })
+            }
+            "agendamento_ativar" | "agendamento_cancelar" => {
+                let sid = text("id");
+                let sch = self.storage.call({ let sid = sid.clone(); move |s| s.schedules().get(&sid) }).await?;
+                if sch.dot_id != c.agente_id {
+                    return Err(DotsError::Validation("este agendamento nao e deste agente".into()));
+                }
+                if c.tipo == "agendamento_cancelar" {
+                    self.dispatch("schedules.delete", json!({ "id": sid })).await?;
+                    json!({ "agendamento": sid, "removido": true })
+                } else {
+                    let ativo = c.dados.get("ativo").and_then(Value::as_bool).unwrap_or(true);
+                    self.dispatch("schedules.update", json!({ "id": sid, "patch": { "enabled": ativo } })).await?;
+                    json!({ "agendamento": sid, "ativo": ativo })
+                }
+            }
+            other => return Err(DotsError::Validation(format!("comando desconhecido: {other}"))),
+        };
+        let (aid, tipo, dados, res) = (c.agente_id.clone(), c.tipo.clone(), c.dados.clone(), result.clone());
+        let _ = self.storage.call(move |s| s.audit().record("user", "flexi_web.command", "dot", Some(&aid), json!({ "comando": tipo, "dados": dados, "resultado": res })).map(|_| ())).await;
+        Ok(result)
+    }
 }
 
 async fn register_agents(svc: &RuntimeService, client: &FlexiClient) -> Result<(), SyncError> {
     let dots = svc.flexi_shared_dots().await?;
     let teams = svc.storage.call(|s| s.teams().list()).await?;
     let equipes = svc.flexi_teams().await?;
+    let engines = svc.storage.call(|s| s.engines().list()).await?;
     let agentes = dots.iter().map(|d| agent_payload(d, shared_users(d, &dots, &teams))).collect::<Vec<_>>();
-    let body = json!({ "versao": crate::VERSION, "agentes": agentes, "equipes": equipes });
+    let body = json!({ "versao": crate::VERSION, "agentes": agentes, "equipes": equipes, "motores": engines_payload(&engines) });
     client.call("PUT", &path("/agentes"), None, Some(&body)).await?;
     tracing::debug!(agentes = dots.len(), equipes = equipes.len(), "DOTs compartilhados registrados no Flexi");
     Ok(())
@@ -499,7 +649,6 @@ async fn push_progress(svc: &RuntimeService, client: &FlexiClient, st: &mut Sync
         if done {
             client.call("POST", &path(&format!("/mensagens/{id}/estado")), None, Some(&json!({ "estado": if estado == "erro" { "erro" } else { "concluida" } }))).await?;
             st.inflight.remove(&id);
-            st.perf_dirty = true;
         }
     }
     Ok(())
@@ -534,25 +683,27 @@ async fn push_mirror(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncSt
         };
         for m in candidates {
             let inflight = m.role == MessageRole::Dot && m.task_id.as_deref().is_some_and(|t| inflight_tasks.contains(t));
-            if let Some((papel, conteudo, estado, done, acoes)) = mirror_payload(&m).filter(|_| !inflight) {
-                let situacao = match (&m.task_id, done) {
+            if let Some(p) = mirror_payload(&m).filter(|_| !inflight) {
+                let situacao = match (&m.task_id, p.done) {
                     (Some(t), false) => svc.storage.call({ let t = t.clone(); move |s| s.tasks().get(&t) }).await.map(|t| t.status.as_str().to_string()).unwrap_or_default(),
                     _ => String::new(),
                 };
-                let key = (conteudo.clone(), estado.to_string(), situacao.clone());
+                let key = (p.conteudo.clone(), p.estado.to_string(), situacao.clone());
                 if mirror.open.get(&m.id) != Some(&key) {
                     let body = json!({
                         "agente_id": dot_id,
                         "dots_message_id": m.id,
-                        "papel": papel,
-                        "conteudo": conteudo,
-                        "estado": estado,
+                        "papel": p.papel,
+                        "conteudo": p.conteudo,
+                        "estado": p.estado,
                         "situacao": situacao,
-                        "acoes": acoes,
+                        "acoes": p.acoes,
+                        "origem": p.origem,
+                        "detalhe": p.detalhe,
                         "criada_em": m.created_at,
                     });
                     client.call("POST", &path("/mensagens"), None, Some(&body)).await?;
-                    if done {
+                    if p.done {
                         mirror.open.remove(&m.id);
                     } else {
                         mirror.open.insert(m.id.clone(), key);
@@ -578,6 +729,8 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         register_agents(svc, client).await?;
         st.registry_dirty = false;
         st.mirror_all = true;
+        st.schedules_dirty = true;
+        st.goals_dirty = true;
     }
 
     let (pending, dots) = svc.flexi_sync_counts().await?;
@@ -598,24 +751,24 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         let notifications = svc.storage.call(|s| s.notifications().list(true, NOTIFICATIONS_LIMIT)).await?;
         body["notificacoes"] = json!(notifications);
     }
-    let perf_due = match st.last_perf_push {
-        None => true,
-        Some(t) => t.elapsed() >= PERFORMANCE_INTERVAL || (st.perf_dirty && t.elapsed() >= PERFORMANCE_DEBOUNCE),
-    };
-    if perf_due {
-        body["desempenho"] = json!({ "7": svc.performance_summary(7).await?, "30": svc.performance_summary(30).await? });
+    // Agendamentos de todos os DOTs, a lista inteira: o Flexi substitui a de cada agente.
+    if !st.started || st.schedules_dirty {
+        let schedules = svc.storage.call(|s| s.schedules().list(None)).await?;
+        body["agendamentos"] = Value::Array(schedules.iter().map(schedule_payload).collect());
+    }
+    // Metas com o historico recente, a lista inteira.
+    if !st.started || st.goals_dirty {
+        body["metas"] = Value::Array(svc.goals_snapshot().await?);
     }
     let resp = client.call("POST", &path("/sincronizar"), None, Some(&body)).await?;
     // So depois do aceite: um erro de rede deixa os dados para a proxima rodada.
     st.started = true;
     st.approvals_dirty = false;
     st.notifications_dirty = false;
+    st.schedules_dirty = false;
+    st.goals_dirty = false;
     if states_due {
         st.last_states = Some(states_json);
-    }
-    if perf_due {
-        st.perf_dirty = false;
-        st.last_perf_push = Some(tokio::time::Instant::now());
     }
     let resp: SyncResponse = serde_json::from_value(resp).map_err(|e| SyncError::Failed(format!("resposta inesperada do Flexi: {e}")))?;
     if resp.reenviar_registro && !st.registry_dirty {
@@ -623,6 +776,22 @@ async fn cycle(svc: &RuntimeService, client: &FlexiClient, st: &mut SyncState) -
         st.registry_dirty = true;
         st.last_states = None;
         st.notifications_dirty = true;
+        st.schedules_dirty = true;
+        st.goals_dirty = true;
+    }
+
+    // Comandos do dono dados no Flexi web (menu do agente): aplica e confirma; o estado novo vai na proxima rodada.
+    for c in &resp.comandos {
+        let body = match svc.apply_flexi_command(c).await {
+            Ok(resultado) => json!({ "ok": true, "resultado": resultado }),
+            Err(e) => {
+                tracing::warn!(comando = c.id, tipo = %c.tipo, error = %e, "comando do Flexi web nao pode ser aplicado");
+                json!({ "ok": false, "erro": e.to_string() })
+            }
+        };
+        client.call("POST", &path(&format!("/comandos/{}/aplicada", c.id)), None, Some(&body)).await?;
+        st.registry_dirty = true;
+        st.schedules_dirty = true;
     }
 
     // Avisos dispensados no Flexi web: o mesmo efeito de clicar no balao do app.
@@ -684,12 +853,11 @@ async fn wait_tick(svc: &RuntimeService, rx: &mut broadcast::Receiver<dots_ipc::
                 Ok(ev) if ev.event == "settings.changed" && ev.payload.get("key").and_then(Value::as_str) == Some(TEAMS_ORDER_SETTING) => { st.registry_dirty = true; return }
                 Ok(ev) if APPROVAL_EVENTS.contains(&ev.event.as_str()) => { st.approvals_dirty = true; return }
                 Ok(ev) if ev.event == NOTIFICATION_EVENT => { st.notifications_dirty = true; return }
+                Ok(ev) if ev.event == AUTOMATION_EVENT => { st.schedules_dirty = true; return }
+                Ok(ev) if ev.event == GOAL_EVENT => { st.goals_dirty = true; return }
                 Ok(ev) if ev.event == "task.changed" => {
                     let id = ev.payload.get("id").and_then(Value::as_str).unwrap_or("");
-                    let status = ev.payload.get("status").and_then(Value::as_str).unwrap_or("");
-                    let tracked = st.inflight.values().any(|f| f.task_id == id);
-                    if matches!(status, "COMPLETED" | "FAILED" | "CANCELLED") { st.perf_dirty = true; }
-                    if tracked { return }
+                    if st.inflight.values().any(|f| f.task_id == id) { return }
                 }
                 Ok(ev) if ev.event == "message.changed" => {
                     let cid = ev.payload.get("conversation_id").and_then(Value::as_str).unwrap_or("");
@@ -785,8 +953,11 @@ mod tests {
     #[test]
     fn estado_da_resposta_segue_os_metadados_do_executor() {
         assert_eq!(reply_state(&json!({ "streaming": true })), ("processando", false));
-        assert_eq!(reply_state(&json!({ "streaming": false, "status": "completed", "tools": ["flexi_anuncios"] })), ("concluida", true));
-        assert_eq!(reply_state(&json!({ "streaming": false, "status": "failed", "error": "x" })), ("erro", true));
+        // O executor grava ExecutionStatus::as_str() em maiusculas.
+        assert_eq!(reply_state(&json!({ "streaming": false, "status": "COMPLETED", "tools": ["flexi_anuncios"] })), ("concluida", true));
+        assert_eq!(reply_state(&json!({ "streaming": false, "status": "completed" })), ("concluida", true));
+        assert_eq!(reply_state(&json!({ "streaming": false, "status": "FAILED", "error": "x" })), ("erro", true));
+        assert_eq!(reply_state(&json!({ "streaming": false, "status": "CANCELLED" })), ("erro", true));
         assert_eq!(reply_state(&json!({})), ("processando", false));
         assert_eq!(reply_actions(&json!({ "tools": ["a", "b", 3] })), vec!["a".to_string(), "b".to_string()]);
         assert!(reply_actions(&json!({})).is_empty());
@@ -798,16 +969,19 @@ mod tests {
 
     #[test]
     fn espelho_leva_usuario_dot_e_sistema_e_pula_ferramentas_e_o_que_veio_do_flexi() {
-        assert_eq!(mirror_payload(&conv_msg(MessageRole::User, "oi", json!({}))), Some(("usuario", "oi".to_string(), "concluida", true, vec![])));
-        assert_eq!(mirror_payload(&conv_msg(MessageRole::System, "Gatilho: pedido", json!({ "origin": "event" }))), Some(("sistema", "Gatilho: pedido".to_string(), "concluida", true, vec![])));
+        let u = mirror_payload(&conv_msg(MessageRole::User, "oi", json!({}))).unwrap();
+        assert_eq!((u.papel, u.conteudo.as_str(), u.estado, u.done, u.origem.as_str()), ("usuario", "oi", "concluida", true, ""));
+        let n = mirror_payload(&conv_msg(MessageRole::System, "Mariana agendou: cron 0 8 * * *", json!({ "origin": "schedule:abc", "prompt": "rodada" }))).unwrap();
+        assert_eq!((n.papel, n.estado, n.done, n.origem.as_str(), n.detalhe.as_str()), ("sistema", "concluida", true, "schedule", "rodada"));
+        assert_eq!(mirror_payload(&conv_msg(MessageRole::System, "Gatilho: pedido", json!({ "origin": "event" }))).unwrap().origem, "event");
         assert_eq!(mirror_payload(&conv_msg(MessageRole::Tool, "x", json!({}))), None);
         assert_eq!(mirror_payload(&conv_msg(MessageRole::User, "Ana (pelo Flexi): oi", json!({ "flexi": { "mensagem_id": 3 } }))), None);
-        assert_eq!(mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": true }))), Some(("agente", String::new(), "processando", false, vec![])));
-        assert_eq!(
-            mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": false, "status": "failed", "error": "deu ruim", "tools": ["a"] }))),
-            Some(("agente", "deu ruim".to_string(), "erro", true, vec!["a".to_string()]))
-        );
-        assert_eq!(mirror_payload(&conv_msg(MessageRole::Dot, "pronto", json!({ "streaming": false, "status": "completed" }))), Some(("agente", "pronto".to_string(), "concluida", true, vec![])));
+        let streaming = mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": true }))).unwrap();
+        assert_eq!((streaming.papel, streaming.estado, streaming.done), ("agente", "processando", false));
+        let failed = mirror_payload(&conv_msg(MessageRole::Dot, "", json!({ "streaming": false, "status": "FAILED", "error": "deu ruim", "tools": ["a"] }))).unwrap();
+        assert_eq!((failed.conteudo.as_str(), failed.estado, failed.done, failed.acoes.clone()), ("deu ruim", "erro", true, vec!["a".to_string()]));
+        let ok = mirror_payload(&conv_msg(MessageRole::Dot, "pronto", json!({ "streaming": false, "status": "COMPLETED" }))).unwrap();
+        assert_eq!((ok.conteudo.as_str(), ok.estado, ok.done), ("pronto", "concluida", true));
     }
 
     #[test]
@@ -821,13 +995,16 @@ mod tests {
         let r: SyncResponse = serde_json::from_value(json!({
             "mensagens": [{ "id": 1, "agente_id": "d", "usuario_id": 9, "autor_nome": "Ana", "conteudo": "oi", "estado": "enviada" }],
             "decisoes": [{ "id": "ap-1", "aprovado": false, "motivo": "nao agora" }],
-            "dispensadas": ["n-1"]
+            "dispensadas": ["n-1"],
+            "comandos": [{ "id": 5, "agente_id": "d", "tipo": "definir_modelo", "dados": { "modelo": "gpt-5.6-terra" } }, { "id": 6, "agente_id": "d", "tipo": "pausar" }]
         }))
         .unwrap();
         assert_eq!(r.mensagens.len(), 1);
         assert_eq!(r.mensagens[0].autor_nome, "Ana");
         assert_eq!(r.decisoes[0], Decision { id: "ap-1".into(), aprovado: false, motivo: Some("nao agora".into()) });
         assert_eq!(r.dispensadas, vec!["n-1".to_string()]);
+        assert_eq!(r.comandos[0], Command { id: 5, agente_id: "d".into(), tipo: "definir_modelo".into(), dados: json!({ "modelo": "gpt-5.6-terra" }) });
+        assert_eq!(r.comandos[1].dados, Value::Null);
         let vazio: SyncResponse = serde_json::from_value(json!({ "status": 1 })).unwrap();
         assert!(vazio.mensagens.is_empty() && vazio.decisoes.is_empty() && !vazio.reenviar_registro);
         let pede: SyncResponse = serde_json::from_value(json!({ "status": 1, "reenviar_registro": true })).unwrap();

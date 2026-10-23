@@ -63,6 +63,37 @@ fn parse_hm(s: &str) -> DotsResult<(u32, u32)> {
     Ok((h, m))
 }
 
+/// Frase legível para as notas da conversa e a lista no Flexi. A expressão completa segue em `spec` no app.
+fn describe_cron(spec: &str) -> String {
+    let parts: Vec<&str> = spec.split_whitespace().collect();
+    if parts.len() != 5 {
+        return "agendamento personalizado".into();
+    }
+    let (minute, hour, dom, month, dow) = (parts[0], parts[1], parts[2], parts[3], parts[4]);
+    if dom == "*" && month == "*" && dow == "*" {
+        if hour == "*" {
+            if let Some(n) = minute.strip_prefix("*/").and_then(|v| v.parse::<u32>().ok()).filter(|v| *v > 0) {
+                return format!("a cada {n} min");
+            }
+        }
+        if minute == "0" {
+            if let Some(n) = hour.strip_prefix("*/").and_then(|v| v.parse::<u32>().ok()).filter(|v| *v > 0) {
+                return format!("a cada {n} horas");
+            }
+        }
+        if let Ok(m) = minute.parse::<u32>() {
+            let hours = hour.split(',').map(str::parse::<u32>).collect::<Result<Vec<_>, _>>();
+            if let Ok(hours) = hours {
+                if m < 60 && !hours.is_empty() && hours.iter().all(|h| *h < 24) {
+                    let times = hours.iter().map(|h| format!("{h:02}:{m:02}")).collect::<Vec<_>>().join(", ");
+                    return format!("todos os dias às {times}");
+                }
+            }
+        }
+    }
+    "agendamento personalizado".into()
+}
+
 pub fn describe(s: &Schedule) -> String {
     match s.kind {
         ScheduleKind::Every => format!("a cada {} min", s.spec),
@@ -73,7 +104,7 @@ pub fn describe(s: &Schedule) -> String {
             let d: usize = p.next().and_then(|x| x.parse().ok()).unwrap_or(0);
             format!("toda {} as {}", names.get(d).unwrap_or(&"?"), p.next().unwrap_or("?"))
         }
-        ScheduleKind::Cron => format!("cron {}", s.spec),
+        ScheduleKind::Cron => describe_cron(&s.spec),
     }
 }
 
@@ -107,7 +138,9 @@ pub async fn run(service: Arc<RuntimeService>) {
             let _autonomy_guard = service.autonomy_lock.lock().await;
             let next = next_run(s.kind, &s.spec, &dots_core::now()).ok();
             let (id, n) = (s.id.clone(), next);
-            let _ = service.storage.call(move |st| st.schedules().mark_run(&id, n.as_ref())).await;
+            if service.storage.call(move |st| st.schedules().mark_run(&id, n.as_ref())).await.is_ok() {
+                service.events.emit("automation.changed", json!({ "dot_id": s.dot_id }));
+            }
             match service.skip_autonomy_schedule(&s).await {
                 Ok(true) => continue,
                 Err(e) => {
@@ -211,6 +244,13 @@ impl RuntimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cron_da_conversa_e_legivel() {
+        assert_eq!(describe_cron("0 8,10,12,14,16 * * *"), "todos os dias às 08:00, 10:00, 12:00, 14:00, 16:00");
+        assert_eq!(describe_cron("*/5 * * * *"), "a cada 5 min");
+        assert_eq!(describe_cron("0 8 * * 1-5"), "agendamento personalizado");
+    }
 
     #[test]
     fn computes_next_runs() {
