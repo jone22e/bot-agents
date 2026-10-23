@@ -48,8 +48,8 @@ pub fn catalog() -> &'static [FlexiTool] {
         FlexiTool { name: "flexi_anuncios_geral", description: "Visao geral dos anuncios (totais e status por marketplace/conta).", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_vendas", description: "Vendas por anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/vendas", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", false), ("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_falha", description: "Anuncios com falha de publicacao/sincronizacao.", method: "POST", path: "/api/gestao-marketplaces/anuncios/falha", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
-        FlexiTool { name: "flexi_precos_calculados", description: "Precos calculados pelo Flexi para anuncios (preco sugerido, preco minimo, taxas, frete). Consulte antes de alterar qualquer preco; nunca va abaixo do preco minimo.", method: "GET", path: "/api/gestao-marketplaces/anuncios/precos-calculados", params_in: ParamsIn::Query, params: &[("ids", "string", "ids de anuncio separados por virgula", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
-        FlexiTool { name: "flexi_historico_preco", description: "Historico de precos de anuncios.", method: "POST", path: "/api/gestao-marketplaces/anuncios/historico-preco", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_precos_calculados", description: "Precos calculados pelo Flexi para um anuncio (preco sugerido, preco minimo, taxas, frete). Consulte antes de alterar qualquer preco; nunca va abaixo do preco minimo.", method: "GET", path: "/api/gestao-marketplaces/anuncios/precos-calculados", params_in: ParamsIn::Query, params: &[("anuncio_id", "integer", "id do anuncio (produto_marketplace.id)", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_historico_preco", description: "Historico de precos de um anuncio.", method: "GET", path: "/api/gestao-marketplaces/anuncios/historico-preco", params_in: ParamsIn::Query, params: &[("anuncio_id", "integer", "id do anuncio (produto_marketplace.id)", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_moderacao_itens", description: "Itens em moderacao/infracao nos marketplaces.", method: "POST", path: "/api/gestao-marketplaces/anuncios/moderacao/itens", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_estoque_inconsistencias", description: "Anuncios com estoque divergente entre Flexi e marketplace.", method: "GET", path: "/api/gestao-marketplaces/anuncios/estoque-inconsistencias", params_in: ParamsIn::Query, params: &[("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_jobs_status", description: "Status de operacoes assincronas (batch_id/operation_id devolvidos por acoes de anuncio).", method: "GET", path: "/api/gestao-marketplaces/jobs/status", params_in: ParamsIn::Query, params: &[("batch_id", "string", "", false), ("operation_id", "string", "", false)], risk: R, group: "anuncios" },
@@ -201,5 +201,18 @@ mod tests {
         let (p, q, _) = build_request(find_tool("flexi_api").unwrap(), &json!({ "path": "/api/produtos", "query": { "busca": "x" } })).unwrap();
         assert_eq!(p, "/api/produtos");
         assert_eq!(q.unwrap()["busca"], "x");
+    }
+
+    #[test]
+    fn price_read_tools_match_flexi_contract() {
+        for name in ["flexi_precos_calculados", "flexi_historico_preco"] {
+            let tool = find_tool(name).unwrap();
+            assert_eq!(tool.method, "GET");
+            assert_eq!(tool.params_in, ParamsIn::Query);
+            assert!(build_request(tool, &json!({})).is_err());
+            let (_, query, body) = build_request(tool, &json!({ "anuncio_id": 39801 })).unwrap();
+            assert_eq!(query.unwrap(), json!({ "anuncio_id": 39801 }));
+            assert!(body.is_none());
+        }
     }
 }

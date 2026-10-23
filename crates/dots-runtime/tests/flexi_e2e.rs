@@ -168,8 +168,10 @@ async fn connect_bind_and_use_flexi_tools_with_approval_and_session_renewal() {
     assert_eq!(t.status, TaskStatus::Completed, "erro={:?} result={:?}", t.error, t.result_text);
     assert!(t.result_text.as_deref().unwrap().contains("Furadeira X"), "{:?}", t.result_text);
     // leitura de precos calculados (GET com query)
-    let t = rt.run(&d, r#"FLEXI:flexi_precos_calculados:{"ids":"101,102"}"#).await;
+    let t = rt.run(&d, r#"FLEXI:flexi_precos_calculados:{"anuncio_id":101}"#).await;
     assert!(t.result_text.as_deref().unwrap().contains("preco_minimo"));
+    let t = rt.run(&d, r#"FLEXI:flexi_historico_preco:{"anuncio_id":101}"#).await;
+    assert!(t.result_text.as_deref().unwrap().contains("dados"));
     // escrita com politica "read" exige aprovacao (o helper aprova) e altera o preco
     let t = rt.run(&d, r#"FLEXI:flexi_atualizar_preco:{"id":101,"preco":189.9}"#).await;
     assert!(t.result_text.as_deref().unwrap().starts_with("OK"), "{:?}", t.result_text);

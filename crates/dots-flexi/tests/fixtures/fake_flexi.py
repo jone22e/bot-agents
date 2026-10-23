@@ -2,6 +2,7 @@
 """Flexi falso para testes: login (com 2FA opcional), login pelo navegador, /api/me por cookie, foto, rotas de anuncios e Google Ads."""
 import json, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 PORT = int(sys.argv[1]); MFA = "--mfa" in sys.argv
 SESSIONS = {}  # cookie -> user
@@ -65,7 +66,9 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"status": 1, "campanha": path.split("/")[-2], "paused": True})
         return self._json(404, {"status": 0, "motivo": "rota desconhecida"})
     def do_GET(self):
-        path = self.path.split("?")[0]
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if path == "/api/me":
             u = self._user()
             if STATE["expire_next"]:
@@ -98,7 +101,14 @@ class H(BaseHTTPRequestHandler):
         u = self._user()
         if not u: return self._json(401, {"status": 0, "motivo": "Nao autenticado."})
         if path == "/api/marketplaces/mercadolivre/contas": return self._json(200, {"status": 1, "dados": [{"id": 1, "nome": "Loja ML", "marketplace": 0, "ambiente": "producao"}]})
-        if path == "/api/gestao-marketplaces/anuncios/precos-calculados": return self._json(200, {"status": 1, "dados": [{"id": a["id"], "preco_sugerido": a["preco"], "preco_minimo": a["preco_minimo"]} for a in STATE["anuncios"].values()]})
+        if path in ("/api/gestao-marketplaces/anuncios/precos-calculados", "/api/gestao-marketplaces/anuncios/historico-preco"):
+            anuncio_id = query.get("anuncio_id", [""])[0]
+            if not anuncio_id.isdigit(): return self._json(200, {"status": 0, "motivo": "Anúncio não informado."})
+            anuncio = STATE["anuncios"].get(int(anuncio_id))
+            if not anuncio: return self._json(200, {"status": 0, "motivo": "Anúncio do marketplace não encontrado."})
+            if path.endswith("/precos-calculados"):
+                return self._json(200, {"status": 1, "dados": {"id": anuncio["id"], "preco_sugerido": anuncio["preco"], "preco_minimo": anuncio["preco_minimo"]}})
+            return self._json(200, {"status": 1, "dados": []})
         if path == "/api/google/ads/contas": return self._json(200, {"status": 1, "dados": [{"id": 3, "customer_id": "123-456-7890"}]})
         if path == "/api/me/profile-photo": return self._json(200, {"url": f"http://127.0.0.1:{PORT}/__photo.png"})
         if path == "/api/perguntas-new/threads": return self._json(200, {"status": 1, "dados": [], "page": 1})

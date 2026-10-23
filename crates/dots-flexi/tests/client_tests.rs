@@ -2,6 +2,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use dots_flexi::{BrowserLoginPoll, FlexiClient, FlexiError, LoginOutcome};
+use dots_flexi::catalog::{build_request, find_tool};
 use serde_json::json;
 
 struct Server {
@@ -58,8 +59,16 @@ async fn login_me_call_and_expiry() {
     assert!(c.me().await.is_ok());
     let v = c.call("POST", "/api/gestao-marketplaces/anuncios", None, Some(&json!({ "ids": [101] }))).await.unwrap();
     assert_eq!(v["dados"][0]["nome"], "Furadeira X");
-    let v = c.call("GET", "/api/gestao-marketplaces/anuncios/precos-calculados", Some(&json!({ "ids": "101,102" })), None).await.unwrap();
+    let price_tool = find_tool("flexi_precos_calculados").unwrap();
+    let (price_path, price_query, price_body) = build_request(price_tool, &json!({ "anuncio_id": 101 })).unwrap();
+    let v = c.call(price_tool.method, &price_path, price_query.as_ref(), price_body.as_ref()).await.unwrap();
     assert_eq!(v["status"], 1);
+    assert_eq!(v["dados"]["id"], 101);
+    let history_tool = find_tool("flexi_historico_preco").unwrap();
+    let (history_path, history_query, history_body) = build_request(history_tool, &json!({ "anuncio_id": 101 })).unwrap();
+    let v = c.call(history_tool.method, &history_path, history_query.as_ref(), history_body.as_ref()).await.unwrap();
+    assert_eq!(v["status"], 1);
+    assert!(v["dados"].is_array());
     // cookie restaurado em novo cliente funciona
     let c2 = FlexiClient::new(&s.url()).unwrap();
     c2.restore_session_cookie(&cookie);
