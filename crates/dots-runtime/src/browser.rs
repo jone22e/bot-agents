@@ -4,7 +4,7 @@
 //! Sem dependencias externas: o CDP por pipe e JSON terminado em `\0` nos descritores 3 (entrada
 //! do navegador) e 4 (saida). O runtime fala direto com o processo; nenhuma porta e aberta.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use dots_core::{DotsError, DotsResult};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::sync::{broadcast, oneshot};
 
@@ -135,6 +135,9 @@ impl PageSnapshot {
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
 /// Um processo de navegador vivo, ligado a um DOT.
+/// Quantas linhas do stderr do navegador ficam guardadas para o diagnostico.
+const STDERR_TAIL_LINES: usize = 40;
+
 pub struct Browser {
     pub binary: BrowserBinary,
     pub pid: u32,
@@ -151,13 +154,35 @@ pub struct Browser {
     session: tokio::sync::Mutex<Option<String>>,
     /// Serializa operacoes de pagina.
     op: tokio::sync::Mutex<()>,
+    /// Ultimas linhas do stderr do navegador: o motivo quando ele morre antes de responder.
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
     /// Dialogo nativo aberto na pagina (`alert`/`confirm`/`prompt`): enquanto existir, a pagina nao roda JavaScript.
     dialog: Arc<Mutex<Option<String>>>,
 }
 
+/// O Chrome morreu porque a sandbox nao conseguiu criar namespaces (tipico de container Docker sem `SYS_ADMIN`).
+/// Olha o stderr guardado na mensagem de erro do lancamento.
+pub fn sandbox_unavailable(err: &str) -> bool {
+    err.contains("Failed to move to new namespace") || err.contains("Zygote process exited prematurely") || err.contains("No usable sandbox")
+}
+
 impl Browser {
     /// Inicia o navegador com perfil proprio e abre o canal CDP.
+    ///
+    /// Primeiro com a sandbox do Chrome. Em containers (Docker sem `SYS_ADMIN`, seccomp padrao) o kernel nega criar
+    /// namespaces, o zygote morre e o navegador aborta antes de responder; nesse caso, e so nele, relanca com `--no-sandbox`.
     pub async fn launch(binary: BrowserBinary, profile_dir: &Path, home: &Path, opts: &LaunchOptions) -> DotsResult<Self> {
+        match Self::launch_with(binary.clone(), profile_dir, home, opts, false).await {
+            Ok(b) => Ok(b),
+            Err(e) if sandbox_unavailable(&e.to_string()) => {
+                tracing::warn!(binary = %binary.path.display(), "sandbox do navegador indisponivel neste sistema (namespaces negados); iniciando sem sandbox");
+                Self::launch_with(binary, profile_dir, home, opts, true).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn launch_with(binary: BrowserBinary, profile_dir: &Path, home: &Path, opts: &LaunchOptions, no_sandbox: bool) -> DotsResult<Self> {
         std::fs::create_dir_all(profile_dir)?;
         let (to_child_r, to_child_w) = raw_pipe()?;
         let (from_child_r, from_child_w) = raw_pipe()?;
@@ -177,6 +202,9 @@ impl Browser {
         if opts.headless {
             cmd.arg("--headless");
         }
+        if no_sandbox {
+            cmd.arg("--no-sandbox");
+        }
         cmd.arg("about:blank");
         cmd.env_clear()
             .env("HOME", home)
@@ -187,9 +215,17 @@ impl Browser {
             .env("PATH", "/usr/bin:/bin")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
+        // No Linux o navegador com janela precisa achar a sessao grafica (X11 ou Wayland) e o D-Bus do usuario.
+        if cfg!(target_os = "linux") {
+            for key in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS"] {
+                if let Ok(v) = std::env::var(key) {
+                    cmd.env(key, v);
+                }
+            }
+        }
         // No filho: as pontas do pipe viram os descritores 3 e 4 (somente chamadas async-signal-safe).
         unsafe {
             cmd.pre_exec(move || {
@@ -201,10 +237,24 @@ impl Browser {
                 Ok(())
             });
         }
-        let child = cmd.spawn().map_err(|e| DotsError::Io(format!("falha ao iniciar {}: {e}", binary.path.display())))?;
+        let mut child = cmd.spawn().map_err(|e| DotsError::Io(format!("falha ao iniciar {}: {e}", binary.path.display())))?;
         unsafe {
             libc::close(to_child_r);
             libc::close(from_child_w);
+        }
+        let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut t = tail.lock().unwrap();
+                    if t.len() >= STDERR_TAIL_LINES {
+                        t.pop_front();
+                    }
+                    t.push_back(line);
+                }
+            });
         }
         let pid = child.id().ok_or_else(|| DotsError::Io("navegador sem pid".into()))?;
         let writer = pipe::Sender::from_owned_fd(unsafe { OwnedFd::from_raw_fd(to_child_w) })?;
@@ -228,16 +278,31 @@ impl Browser {
             screencast: AtomicBool::new(false),
             session: tokio::sync::Mutex::new(None),
             op: tokio::sync::Mutex::new(()),
+            stderr_tail,
             dialog,
         };
-        // Primeiro contato: confirma que o canal responde.
-        let v = b.call(None, "Browser.getVersion", json!({})).await?;
-        tracing::info!(pid, binary = %b.binary.label, product = v.get("product").and_then(|p| p.as_str()).unwrap_or("?"), profile = %profile_dir.display(), "navegador iniciado");
+        // Primeiro contato: confirma que o canal responde. Se o navegador morreu, diz por que (saida e stderr).
+        let v = match b.call(None, "Browser.getVersion", json!({})).await {
+            Ok(v) => v,
+            Err(e) => {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let status = b.child.lock().unwrap().as_mut().and_then(|c| c.try_wait().ok().flatten()).map(|st| st.to_string()).unwrap_or_else(|| "ainda em execucao".into());
+                let tail = b.stderr_lines();
+                tracing::warn!(binary = %b.binary.path.display(), %status, stderr = %tail, "navegador nao respondeu ao primeiro contato");
+                return Err(DotsError::Io(format!("{e} ({}; {status}){}", b.binary.path.display(), if tail.is_empty() { String::new() } else { format!(": {tail}") })));
+            }
+        };
+        tracing::info!(pid, binary = %b.binary.label, product = v.get("product").and_then(|p| p.as_str()).unwrap_or("?"), profile = %profile_dir.display(), no_sandbox, "navegador iniciado");
         Ok(b)
     }
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
+    }
+
+    /// Ultimas linhas do stderr do navegador, numa linha so.
+    pub fn stderr_lines(&self) -> String {
+        self.stderr_tail.lock().unwrap().iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" | ")
     }
 
     /// Chamada CDP (`sessionId` opcional) com timeout.
@@ -930,6 +995,14 @@ impl BrowserPool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sandbox_unavailable_reconhece_a_falha_de_namespace_do_container() {
+        let erro = "navegador encerrou durante Browser.getVersion (/usr/bin/google-chrome; signal: 6 (SIGABRT) (core dumped)): Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted | [38943:38943:1023/113922.773721:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc(228)] Zygote process exited prematurely with exit code 1";
+        assert!(super::sandbox_unavailable(erro));
+        assert!(!super::sandbox_unavailable("tempo esgotado em Browser.getVersion (/usr/bin/google-chrome; ainda em execucao)"));
+        assert!(!super::sandbox_unavailable("navegador encerrou durante Browser.getVersion (/usr/bin/google-chrome; exit status: 1): Failed to connect to the bus: Could not parse server address"));
+    }
+
     use super::*;
 
     #[test]
