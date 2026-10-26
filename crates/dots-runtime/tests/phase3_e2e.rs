@@ -402,14 +402,15 @@ async fn supervisor_sees_stopped_worker_and_resumes_delegation() {
     let sup = rt.create_dot("Chefe", "read", "supervisor").await;
     rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
     let w = rt.create_dot("Lento", "read", "worker").await;
-    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Lento:SLEEP:2" })).await).unwrap();
-    rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Lento:SLEEP:10" })).await).unwrap();
     let child = rt.wait_tasks(&w.id, |ts| ts.iter().any(|x| x.origin.starts_with("delegation:")), Duration::from_secs(20)).await;
     let child = child.into_iter().find(|x| x.origin.starts_with("delegation:")).unwrap();
     let did = child.origin.trim_start_matches("delegation:").to_string();
     // o funcionario para (cancelado): a delegacao fica cancelada e o gerente ve isso no status
+    rt.wait_task(&child.id, &[TaskStatus::Running], Duration::from_secs(15)).await;
     rt.call("tasks.cancel", json!({ "id": child.id })).await;
     rt.wait_task(&child.id, &[TaskStatus::Cancelled], Duration::from_secs(15)).await;
+    rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
     rt.wait_delegation(&t.id, &did, DelegationStatus::Cancelled, Duration::from_secs(15)).await;
     // o gerente retoma: a tarefa volta a fila, roda e a delegacao termina concluida
     let r: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
