@@ -15,6 +15,10 @@ pub const GOAL_EVENT: &str = "goal.changed";
 const DOT_MAX_ACTIVE_GOALS: usize = 10;
 const HISTORY_LIMIT: u32 = 200;
 
+fn counts_towards_goal_limit(goal: &Goal, now: Timestamp) -> bool {
+    goal.status == GoalStatus::Active && goal.period_end.is_none_or(|end| end > now)
+}
+
 fn fmt_num(v: f64) -> String {
     if (v - v.round()).abs() < 1e-9 { format!("{}", v.round() as i64) } else { format!("{v:.2}").replace('.', ",") }
 }
@@ -85,15 +89,16 @@ impl RuntimeService {
             Err(e) => return Ok(ToolOutput::err(e)),
         };
         let existing = self.storage.call({ let d = ctx.dot_id.clone(); move |st| st.goals().list(Some(&d), true) }).await?;
-        if let Some(same) = existing.iter().find(|g| g.title.trim().eq_ignore_ascii_case(title.trim())) {
+        let now = dots_core::now();
+        if let Some(same) = existing.iter().find(|g| counts_towards_goal_limit(g, now) && g.title.trim().eq_ignore_ascii_case(title.trim())) {
             return Ok(ToolOutput::ok(if (same.target - target).abs() < 1e-9 {
                 format!("esta meta ja existe ({}): {}; lance o progresso com dots_goal_progress", same.id, describe(same))
             } else {
                 format!("ja existe uma meta ativa com este titulo ({}): {}; para mudar o alvo ou o prazo use dots_goal_update em vez de criar outra", same.id, describe(same))
             }));
         }
-        if existing.len() >= DOT_MAX_ACTIVE_GOALS {
-            return Ok(ToolOutput::err(format!("limite de {DOT_MAX_ACTIVE_GOALS} metas ativas: encerre uma com dots_goal_close (veja dots_goal_list)")));
+        if existing.iter().filter(|goal| counts_towards_goal_limit(goal, now)).count() >= DOT_MAX_ACTIVE_GOALS {
+            return Ok(ToolOutput::err(format!("limite de {DOT_MAX_ACTIVE_GOALS} metas vigentes: encerre uma com dots_goal_close (veja dots_goal_list)")));
         }
         let input = GoalCreate { dot_id: ctx.dot_id.clone(), title: title.trim().chars().take(160).collect(), unit: unit.trim().chars().take(30).collect(), target, current, period_end, task_id: Some(ctx.task_id.clone()) };
         let goal = match self.storage.call(move |st| st.goals().create(input)).await {
@@ -262,5 +267,18 @@ mod tests {
         assert!(parse_deadline("2099-01-31").unwrap().is_some());
         assert!(parse_deadline("2099-01-31 18:00").unwrap().is_some());
         assert!(parse_deadline("amanha").is_err());
+    }
+
+    #[test]
+    fn metas_vencidas_nao_ocupam_limite_de_metas_vigentes() {
+        let now = dots_core::now();
+        let mut goal = Goal { id: "g".into(), dot_id: "d".into(), title: "Envios".into(), unit: "envios".into(), target: 10.0, current: 0.0, period_start: now, period_end: Some(now), status: GoalStatus::Active, task_id: None, created_at: now, updated_at: now, closed_at: None };
+        assert!(!counts_towards_goal_limit(&goal, now));
+        goal.period_end = Some(now + chrono::Duration::seconds(1));
+        assert!(counts_towards_goal_limit(&goal, now));
+        goal.period_end = None;
+        assert!(counts_towards_goal_limit(&goal, now));
+        goal.status = GoalStatus::Done;
+        assert!(!counts_towards_goal_limit(&goal, now));
     }
 }
