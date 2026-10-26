@@ -30,6 +30,17 @@ fn should_rotate_session(status: ExecutionStatus, context_tokens: Option<u64>) -
     status == ExecutionStatus::Completed && context_tokens.is_some_and(|n| n >= SESSION_ROTATE_CONTEXT_TOKENS)
 }
 
+fn is_thread_store_conflict(error: &str) -> bool {
+    error.contains("thread-store conflict") || error.contains("already has an active writer")
+}
+
+/// Uma recusa do escritor antes de qualquer atividade pode ser refeita em sessao nova
+/// sem repetir acoes do DOT. Limita a recuperacao a uma tentativa extra.
+fn retry_preflight_thread_conflict(engine: EngineKind, resumed: bool, started: bool, acted: bool, error: Option<&str>, attempt: u32, max_attempts: u32) -> bool {
+    engine == EngineKind::Codex && resumed && !started && !acted && attempt <= max_attempts
+        && error.is_some_and(is_thread_store_conflict)
+}
+
 fn random_token() -> String {
     use rand::RngCore;
     let mut b = [0u8; 24];
@@ -80,8 +91,8 @@ impl RuntimeService {
         }
         let extra_dirs: Vec<PathBuf> = dirs.iter().filter(|d| d.path != workspace && d.can_read).map(|d| d.path.clone()).collect();
 
-        // Estado: RUNNING + execucao
-        let t = self.storage.call({ let id = task.id.clone(); move |s| s.tasks().set_status(&id, TaskStatus::Running, None) }).await?;
+        // O scheduler reservou a tarefa antes de despacha-la.
+        let t = task.clone();
         let execution = self
             .storage
             .call({ let (tid, did, ws) = (task.id.clone(), dot_id.clone(), workspace.to_string_lossy().to_string()); move |s| s.executions().create(&tid, &did, engine, t.attempts, Some(&ws)) })
@@ -217,7 +228,8 @@ impl RuntimeService {
         let pid = handle.pid;
         self.registry.register_handle(&execution.id, handle);
         let _ = self.storage.call({ let eid = execution.id.clone(); move |s| s.executions().set_pid(&eid, pid) }).await;
-        if task.cancel_requested {
+        let cancel_requested = self.storage.call({ let id = task.id.clone(); move |s| Ok(s.tasks().get(&id)?.cancel_requested) }).await.unwrap_or(false);
+        if cancel_requested {
             self.registry.cancel(&execution.id);
         }
 
@@ -241,6 +253,7 @@ impl RuntimeService {
         let mut last_context_tokens: Option<u64> = None;
         let mut tool_names: Vec<String> = vec![];
         let mut steps: Vec<String> = vec![];
+        let mut engine_started = false;
         let mut done = false;
         while !done {
             let ev = tokio::select! {
@@ -250,6 +263,7 @@ impl RuntimeService {
             let persist = !matches!(ev, ExecutionEvent::TextDelta { .. } | ExecutionEvent::Raw { .. });
             match &ev {
                 ExecutionEvent::Started { engine_session_id: Some(sid) } => {
+                    engine_started = true;
                     let (eid, s) = (execution.id.clone(), sid.clone());
                     let _ = self.storage.call(move |st| st.executions().set_session(&eid, &s)).await;
                     if let Some(cid) = &task.conversation_id {
@@ -307,6 +321,9 @@ impl RuntimeService {
                 let _ = self.storage.call(move |st| st.memories().upsert_working(&d, &src, &content)).await;
             }
         }
+        // Eventos terminais podem chegar antes de o CLI sair. Mantenha a conversa ocupada
+        // ate o processo liberar o escritor da thread persistida.
+        while stream.recv().await.is_some() {}
         let (status, error, kind) = outcome.unwrap_or((ExecutionStatus::Failed, Some("motor encerrou sem resultado".into()), FailureKind::Engine));
         // Turno concluido sem o gateway ter falado com o runtime: o CLI descartou o servidor MCP `dots` (ex.: prazo de
         // inicializacao) e o modelo respondeu sem nenhuma ferramenta. Fica registrado no evento e na mensagem.
@@ -318,7 +335,7 @@ impl RuntimeService {
             let seq = self.storage.call(move |st| st.executions().add_event(&eid, &e)).await.map(|r| r.seq).unwrap_or(0);
             self.events.emit("execution.event", json!({ "execution_id": execution.id, "task_id": task.id, "dot_id": dot_id, "seq": seq, "event": notice }));
         }
-        if let Some(sess) = resume_session.as_ref().filter(|_| matches!(kind, FailureKind::Engine) && status == ExecutionStatus::Failed) {
+        if let Some(sess) = resume_session.as_ref().filter(|_| status == ExecutionStatus::Failed && (matches!(kind, FailureKind::Engine) || error.as_deref().is_some_and(is_thread_store_conflict))) {
             // Retomada falhou: limpa a sessao para a proxima tentativa reconstruir o contexto.
             if let Some(cid) = &task.conversation_id {
                 let c = cid.clone();
@@ -339,13 +356,18 @@ impl RuntimeService {
         let _ = std::fs::remove_file(&token_file);
         let _ = self.storage.call({ let (eid, err, u) = (execution.id.clone(), error.clone(), std::mem::take(&mut usage)); move |st| st.executions().finish(&eid, status, None, err.as_deref(), cost, &u) }).await;
         let result_text = final_text.clone().unwrap_or_else(|| text_acc.clone());
+        let safe_conflict_retry = status == ExecutionStatus::Failed && retry_preflight_thread_conflict(
+            engine, resume_session.is_some(), engine_started,
+            !tool_names.is_empty() || !result_text.is_empty(), error.as_deref(), t.attempts, task.max_attempts,
+        );
+        let retryable = matches!(kind, FailureKind::Engine | FailureKind::Timeout) && status != ExecutionStatus::Completed && status != ExecutionStatus::Cancelled;
+        let will_retry = (retryable && task.retry_safe && t.attempts < task.max_attempts) || safe_conflict_retry;
         if let Some(mid) = &dot_message_id {
-            let (m, c, meta) = (mid.clone(), if result_text.is_empty() { error.clone().unwrap_or_default() } else { result_text.clone() }, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": error, "gateway_absent": gateway_absent }));
+            let content = if safe_conflict_retry { "Sessao do Codex ocupada; retomando em uma sessao nova.".to_string() } else if result_text.is_empty() { error.clone().unwrap_or_default() } else { result_text.clone() };
+            let (m, c, meta) = (mid.clone(), content, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": if safe_conflict_retry { None } else { error.as_deref() }, "gateway_absent": gateway_absent }));
             let _ = self.storage.call(move |st| st.conversations().update_message_content(&m, &c, Some(meta))).await;
             self.events.emit("message.changed", json!({ "conversation_id": task.conversation_id, "message_id": mid }));
         }
-        let retryable = matches!(kind, FailureKind::Engine | FailureKind::Timeout) && status != ExecutionStatus::Completed && status != ExecutionStatus::Cancelled;
-        let will_retry = retryable && task.retry_safe && t.attempts < task.max_attempts;
         let task_status = match status {
             ExecutionStatus::Completed => TaskStatus::Completed,
             ExecutionStatus::Cancelled => TaskStatus::Cancelled,
@@ -500,6 +522,17 @@ fn build_task_context(memories: &[dots_core::Memory], working: Option<&str>, res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retries_only_preflight_codex_writer_conflict() {
+        let error = "failed to initialize thread persistence: thread-store conflict: thread 01a178a3-88fd-70e3-8cbe-5b04015c3e already has an active writer";
+        assert!(retry_preflight_thread_conflict(EngineKind::Codex, true, false, false, Some(error), 1, 1));
+        assert!(!retry_preflight_thread_conflict(EngineKind::Codex, true, true, false, Some(error), 1, 1));
+        assert!(!retry_preflight_thread_conflict(EngineKind::Codex, true, false, true, Some(error), 1, 1));
+        assert!(!retry_preflight_thread_conflict(EngineKind::Codex, false, false, false, Some(error), 1, 1));
+        assert!(!retry_preflight_thread_conflict(EngineKind::Codex, true, false, false, Some(error), 2, 1));
+        assert!(!retry_preflight_thread_conflict(EngineKind::Codex, true, false, false, Some("authentication failed"), 1, 1));
+    }
 
     #[test]
     fn instructions_are_bounded_and_include_identity() {

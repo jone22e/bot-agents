@@ -40,9 +40,6 @@ async fn dispatch(service: &Arc<RuntimeService>) -> dots_core::DotsResult<()> {
         return Ok(());
     }
     let queued = service.storage.call(|s| s.tasks().queued(50)).await?;
-    // Conversas e DOTs ja despachados nesta passada: a tarefa anterior pode ainda nao ter registrado RUNNING.
-    let mut busy_conversations: std::collections::HashSet<String> = Default::default();
-    let mut dispatched_per_dot: std::collections::HashMap<String, u32> = Default::default();
     for task in queued {
         if service.engines.available_slots() == 0 {
             break;
@@ -53,44 +50,16 @@ async fn dispatch(service: &Arc<RuntimeService>) -> dots_core::DotsResult<()> {
             service.events.emit("task.changed", json!({ "id": task.id, "dot_id": task.dot_id, "status": "CANCELLED" }));
             continue;
         }
-        if task.conversation_id.as_ref().is_some_and(|c| busy_conversations.contains(c)) {
-            continue;
-        }
-        let (dot_id, conv) = (task.dot_id.clone(), task.conversation_id.clone());
-        let (dot, running, running_conv) = service
-            .storage
-            .call(move |s| {
-                let dot = s.dots().get(&dot_id)?;
-                let running = s.tasks().running_count_for_dot(&dot_id)?;
-                let running_conv = match conv.as_deref() {
-                    Some(c) => s.tasks().running_count_for_conversation(c)?,
-                    None => 0,
-                };
-                Ok((dot, running, running_conv))
-            })
-            .await?;
-        if dot.status != DotStatus::Active {
-            continue;
-        }
-        if running + dispatched_per_dot.get(&task.dot_id).copied().unwrap_or(0) >= dot.limits.max_concurrent_tasks {
-            continue;
-        }
-        // Uma tarefa por conversa de cada vez: a sessao do motor e uma so por conversa.
-        if running_conv > 0 {
-            if let Some(c) = &task.conversation_id {
-                busy_conversations.insert(c.clone());
-            }
-            continue;
-        }
-        tracing::info!(task = %task.id, dot = %dot.name, "despachando tarefa");
-        if let Some(c) = &task.conversation_id {
-            busy_conversations.insert(c.clone());
-        }
-        *dispatched_per_dot.entry(task.dot_id.clone()).or_insert(0) += 1;
+        let id = task.id.clone();
+        let dot_id = task.dot_id.clone();
+        let Some(task) = service.storage.call(move |s| {
+            let dot = s.dots().get(&dot_id)?;
+            if dot.status != DotStatus::Active { return Ok(None); }
+            s.tasks().claim_queued(&id, dot.limits.max_concurrent_tasks)
+        }).await? else { continue };
+        tracing::info!(task = %task.id, dot = %task.dot_id, "despachando tarefa");
         let svc = service.clone();
         tokio::spawn(async move { svc.run_task(task).await });
-        // Evita despachar duas tarefas do mesmo DOT antes da primeira registrar RUNNING.
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
 }

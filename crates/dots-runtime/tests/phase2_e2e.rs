@@ -188,7 +188,13 @@ async fn cancel_and_two_dots_in_parallel_and_conversation() {
     let tb: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": b.id, "prompt": "SLEEP:2" })).await).unwrap();
     rt.wait_task(&ta.id, &[TaskStatus::Running], Duration::from_secs(10)).await;
     rt.wait_task(&tb.id, &[TaskStatus::Running], Duration::from_secs(10)).await;
-    let ov = rt.call("overview.get", json!({})).await;
+    let start = Instant::now();
+    let ov = loop {
+        let ov = rt.call("overview.get", json!({})).await;
+        if ov["dots_running"] == 2 { break ov; }
+        assert!(start.elapsed() < Duration::from_secs(10), "os dois DOTs nao ficaram ativos: {ov}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(ov["dots_running"], 2);
     assert_eq!(ov["tasks_running"], 2);
     rt.wait_task(&ta.id, &[TaskStatus::Completed], Duration::from_secs(15)).await;
@@ -233,6 +239,68 @@ async fn cancel_and_two_dots_in_parallel_and_conversation() {
 }
 
 #[tokio::test]
+async fn queued_messages_in_one_conversation_run_one_at_a_time() {
+    let mut rt = start().await;
+    rt.use_fake_engine().await;
+    let dot = rt.create_dot("A", "read").await;
+    rt.call("dots.update", json!({ "id": dot.id, "patch": { "limits": { "max_execution_seconds": 60, "max_concurrent_tasks": 2, "max_tokens_per_task": null, "max_cost_usd_per_task": null } } })).await;
+    let conv: Conversation = serde_json::from_value(rt.call("conversations.create", json!({ "dot_id": dot.id })).await).unwrap();
+    let first = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "SLEEP:2" })).await;
+    let first: Task = serde_json::from_value(first["task"].clone()).unwrap();
+    rt.wait_task(&first.id, &[TaskStatus::Running], Duration::from_secs(10)).await;
+    let second = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "ola" })).await;
+    let second: Task = serde_json::from_value(second["task"].clone()).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let pending: Task = serde_json::from_value(rt.call("tasks.get", json!({ "id": second.id })).await["task"].clone()).unwrap();
+    assert_eq!(pending.status, TaskStatus::Queued);
+    rt.wait_task(&first.id, &[TaskStatus::Completed], Duration::from_secs(10)).await;
+    rt.wait_task(&second.id, &[TaskStatus::Completed], Duration::from_secs(10)).await;
+    rt.stop();
+}
+
+#[tokio::test]
+async fn codex_writer_conflict_retries_with_new_session_before_any_action() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut rt = start().await;
+    let cli = rt.dir.path().join("fake-codex");
+    std::fs::write(&cli, r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'codex-cli 0.164.0'; exit 0; fi
+if [ "$1" = "login" ] && [ "$2" = "status" ]; then echo 'Logged in'; exit 0; fi
+cat >/dev/null
+for arg in "$@"; do
+  if [ "$arg" = "resume" ]; then
+    echo 'failed to initialize thread persistence: thread-store conflict: thread 01a178a3-88fd-70e3-8cbe-5b04015c3e already has an active writer' >&2
+    exit 1
+  fi
+done
+printf '{"type":"thread.started","thread_id":"fresh-%s"}\n' "$$"
+echo '{"type":"item.completed","item":{"id":"answer","type":"agent_message","text":"OK"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+"#).unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    rt.call("engines.set_override", json!({ "kind": "codex", "path": cli })).await;
+    let dot: Dot = serde_json::from_value(rt.call("dots.create", json!({ "name": "Codex", "primary_engine": "codex" })).await).unwrap();
+    let conv: Conversation = serde_json::from_value(rt.call("conversations.create", json!({ "dot_id": dot.id })).await).unwrap();
+    let first = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "primeira" })).await;
+    let first: Task = serde_json::from_value(first["task"].clone()).unwrap();
+    rt.wait_task(&first.id, &[TaskStatus::Completed], Duration::from_secs(15)).await;
+    let first_session = rt.call("conversations.get", json!({ "id": conv.id })).await["engine_sessions"]["codex"].as_str().unwrap().to_string();
+
+    let second = rt.call("conversations.send", json!({ "conversation_id": conv.id, "content": "segunda" })).await;
+    let second: Task = serde_json::from_value(second["task"].clone()).unwrap();
+    let done = rt.wait_task(&second.id, &[TaskStatus::Completed], Duration::from_secs(15)).await;
+    assert_eq!(done.attempts, 2);
+    let details = rt.call("tasks.get", json!({ "id": second.id })).await;
+    let executions: Vec<Execution> = serde_json::from_value(details["executions"].clone()).unwrap();
+    assert_eq!(executions.len(), 2);
+    assert!(executions.iter().any(|e| e.status == ExecutionStatus::Failed && e.error.as_deref().is_some_and(|s| s.contains("thread-store conflict"))));
+    let new_session = rt.call("conversations.get", json!({ "id": conv.id })).await["engine_sessions"]["codex"].as_str().unwrap().to_string();
+    assert_ne!(first_session, new_session);
+    rt.stop();
+}
+
+#[tokio::test]
 async fn restart_recovers_interrupted_tasks() {
     let mut rt = start().await;
     rt.use_fake_engine().await;
@@ -263,7 +331,7 @@ async fn restart_recovers_interrupted_tasks() {
         let v = client.call("tasks.get", json!({ "id": safe.id })).await.unwrap();
         let t: Task = serde_json::from_value(v["task"].clone()).unwrap();
         let execs: Vec<Execution> = serde_json::from_value(v["executions"].clone()).unwrap();
-        if execs.len() == 2 && execs[0].status == ExecutionStatus::Failed && execs[0].error.as_deref().map(|e| e.contains("interrompida")).unwrap_or(false) {
+        if execs.len() == 2 && execs.iter().any(|e| e.status == ExecutionStatus::Failed && e.error.as_deref().is_some_and(|error| error.contains("interrompida"))) {
             assert!(matches!(t.status, TaskStatus::Running | TaskStatus::Queued | TaskStatus::Completed));
             break;
         }

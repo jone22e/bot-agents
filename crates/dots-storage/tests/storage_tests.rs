@@ -294,6 +294,28 @@ mod phase2 {
     }
 
     #[test]
+    fn claim_queued_blocks_parallel_resumes_of_one_conversation() {
+        let (mut s, dot_id) = with_dot();
+        let conversation = s.conversations().create(&dot_id, "Teste").unwrap();
+        let another = s.conversations().create(&dot_id, "Outra").unwrap();
+        let make = |s: &mut Storage, conversation_id: &str| s.tasks().create(TaskCreate {
+            dot_id: dot_id.clone(), conversation_id: Some(conversation_id.into()), prompt: "x".into(), ..Default::default()
+        }, None).unwrap();
+        let first = make(&mut s, &conversation.id);
+        let second = make(&mut s, &conversation.id);
+        let third = make(&mut s, &another.id);
+
+        let claimed = s.tasks().claim_queued(&first.id, 2).unwrap().unwrap();
+        assert_eq!(claimed.attempts, 1);
+        assert!(claimed.started_at.is_some());
+        assert!(s.tasks().claim_queued(&first.id, 2).unwrap().is_none());
+        assert!(s.tasks().claim_queued(&second.id, 2).unwrap().is_none());
+        assert!(s.tasks().claim_queued(&third.id, 2).unwrap().is_some());
+        s.tasks().set_status(&first.id, TaskStatus::Completed, None).unwrap();
+        assert!(s.tasks().claim_queued(&second.id, 2).unwrap().is_some());
+    }
+
+    #[test]
     fn executions_overlapping_a_day_include_crossing_and_running_work() {
         let (mut s, dot_id) = with_dot();
         let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Medir tempo".into(), ..Default::default() }, None).unwrap();

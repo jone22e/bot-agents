@@ -178,6 +178,26 @@ impl<'a> TasksRepo<'a> {
             .map_err(storage_err)
     }
 
+    /// Marca a tarefa como ativa antes do spawn, numa unica escrita condicional.
+    pub fn claim_queued(&mut self, id: &str, max_per_dot: u32) -> DotsResult<Option<Task>> {
+        let now = ts(&dots_core::now());
+        let changed = self.conn.execute(
+            "UPDATE tasks SET status = 'RUNNING', updated_at = ?2,
+                started_at = COALESCE(started_at, ?2), attempts = attempts + 1
+             WHERE id = ?1 AND status = 'QUEUED' AND cancel_requested = 0
+               AND (conversation_id IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM tasks AS active
+                   WHERE active.conversation_id = tasks.conversation_id
+                     AND active.id != tasks.id AND active.status IN ('RUNNING', 'WAITING_APPROVAL')
+               ))
+               AND (SELECT COUNT(*) FROM tasks AS active
+                    WHERE active.dot_id = tasks.dot_id
+                      AND active.id != tasks.id AND active.status IN ('RUNNING', 'WAITING_APPROVAL')) < ?3",
+            params![id, now, max_per_dot],
+        ).map_err(storage_err)?;
+        if changed == 0 { Ok(None) } else { self.get(id).map(Some) }
+    }
+
     pub fn create(&mut self, input: TaskCreate, engine: Option<EngineKind>) -> DotsResult<Task> {
         let prompt = input.prompt.trim().to_string();
         if prompt.is_empty() {
