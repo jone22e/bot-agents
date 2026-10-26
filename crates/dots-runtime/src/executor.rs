@@ -22,6 +22,8 @@ const MAX_ATTACHMENT_CHARS: usize = 40_000;
 /// encerrada ao fim da tarefa: a proxima tarefa da conversa comeca com sessao nova, so com memorias.
 /// Evita pagar um historico gigante a cada turno; a continuidade vem de memorias, historico e checkpoints.
 const SESSION_ROTATE_CONTEXT_TOKENS: u64 = 100_000;
+/// Aviso gravado quando o motor conclui o turno sem o gateway MCP `dots` ter sido iniciado.
+const GATEWAY_ABSENT_NOTICE: &str = "O motor concluiu o turno sem o servidor MCP dots: nenhuma ferramenta dots_*/flexi_* esteve disponivel. Verifique a carga da maquina e o log do runtime.";
 
 /// Decide se a sessao do motor deve ser encerrada apos a tarefa: so quando concluiu e o contexto medido passou do limite.
 fn should_rotate_session(status: ExecutionStatus, context_tokens: Option<u64>) -> bool {
@@ -143,6 +145,7 @@ impl RuntimeService {
         let tmp_ctx = ExecutionContext {
             token: String::new(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
             workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: mpsc::channel(1).0, app_hosts: app_hosts.clone(),
+            gateway_seen: Default::default(),
         };
         for a in &attachments {
             match tmp_ctx.authorize_path(a, false).and_then(|p| std::fs::read(&p).map_err(|e| DotsError::Io(e.to_string())).map(|c| (p, c))) {
@@ -175,6 +178,7 @@ impl RuntimeService {
         let ctx = Arc::new(ExecutionContext {
             token: token.clone(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
             workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: ev_tx, app_hosts: app_hosts.clone(),
+            gateway_seen: Default::default(),
         });
         let req = ExecutionRequest {
             execution_id: execution.id.clone(),
@@ -304,6 +308,16 @@ impl RuntimeService {
             }
         }
         let (status, error, kind) = outcome.unwrap_or((ExecutionStatus::Failed, Some("motor encerrou sem resultado".into()), FailureKind::Engine));
+        // Turno concluido sem o gateway ter falado com o runtime: o CLI descartou o servidor MCP `dots` (ex.: prazo de
+        // inicializacao) e o modelo respondeu sem nenhuma ferramenta. Fica registrado no evento e na mensagem.
+        let gateway_absent = status == ExecutionStatus::Completed && !ctx.gateway_seen.load(std::sync::atomic::Ordering::SeqCst);
+        if gateway_absent {
+            tracing::warn!(execution = %execution.id, dot = %dot.name, ?engine, "turno concluido sem o gateway MCP dots: o motor rodou sem as ferramentas do DOTS");
+            let notice = ExecutionEvent::Notice { level: "warn".into(), text: GATEWAY_ABSENT_NOTICE.into() };
+            let (eid, e) = (execution.id.clone(), notice.clone());
+            let seq = self.storage.call(move |st| st.executions().add_event(&eid, &e)).await.map(|r| r.seq).unwrap_or(0);
+            self.events.emit("execution.event", json!({ "execution_id": execution.id, "task_id": task.id, "dot_id": dot_id, "seq": seq, "event": notice }));
+        }
         if let Some(sess) = resume_session.as_ref().filter(|_| matches!(kind, FailureKind::Engine) && status == ExecutionStatus::Failed) {
             // Retomada falhou: limpa a sessao para a proxima tentativa reconstruir o contexto.
             if let Some(cid) = &task.conversation_id {
@@ -326,7 +340,7 @@ impl RuntimeService {
         let _ = self.storage.call({ let (eid, err, u) = (execution.id.clone(), error.clone(), std::mem::take(&mut usage)); move |st| st.executions().finish(&eid, status, None, err.as_deref(), cost, &u) }).await;
         let result_text = final_text.clone().unwrap_or_else(|| text_acc.clone());
         if let Some(mid) = &dot_message_id {
-            let (m, c, meta) = (mid.clone(), if result_text.is_empty() { error.clone().unwrap_or_default() } else { result_text.clone() }, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": error }));
+            let (m, c, meta) = (mid.clone(), if result_text.is_empty() { error.clone().unwrap_or_default() } else { result_text.clone() }, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": error, "gateway_absent": gateway_absent }));
             let _ = self.storage.call(move |st| st.conversations().update_message_content(&m, &c, Some(meta))).await;
             self.events.emit("message.changed", json!({ "conversation_id": task.conversation_id, "message_id": mid }));
         }

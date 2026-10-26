@@ -156,6 +156,18 @@ impl<'a> TasksRepo<'a> {
         .collect()
     }
 
+    /// Tarefas em andamento numa conversa. Duas ao mesmo tempo retomariam a mesma sessao do motor
+    /// (o Codex recusa: "thread already has an active writer").
+    pub fn running_count_for_conversation(&self, conversation_id: &str) -> DotsResult<u32> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE conversation_id = ?1 AND status IN ('RUNNING','WAITING_APPROVAL')",
+                params![conversation_id],
+                |r| r.get(0),
+            )
+            .map_err(storage_err)
+    }
+
     pub fn running_count_for_dot(&self, dot_id: &str) -> DotsResult<u32> {
         self.conn
             .query_row(

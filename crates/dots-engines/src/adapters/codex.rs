@@ -14,6 +14,11 @@ fn toml_str(s: &str) -> String {
 
 /// Servidores MCP que o Codex do usuario carrega sozinho (computer use, navegador do Codex, app tools), vistos em
 /// `codex mcp list` do codex-cli 0.162.1. Eles vem de plugins e nao aparecem no config.toml.
+/// Prazo para o gateway `dots` responder ao `initialize`/`tools/list` do Codex (padrao do Codex: 10 s).
+const GATEWAY_STARTUP_TIMEOUT_SEC: u32 = 60;
+/// Prazo por chamada de ferramenta do gateway (comandos e navegador podem levar minutos).
+const GATEWAY_TOOL_TIMEOUT_SEC: u32 = 900;
+
 const CODEX_BUNDLED_MCP: &[&str] = &["cua_repl", "node_repl", "computer-use", "codex_app", "code-review"];
 
 /// Servidores MCP do proprio usuario (`$CODEX_HOME/config.toml` + os embutidos), exceto `keep`, com a indicacao
@@ -67,6 +72,13 @@ impl AgentEngine for CodexAdapter {
             args.push(format!("mcp_servers.{n}.env={{{}}}", env_items.join(",")));
             args.push("-c".into());
             args.push(format!("mcp_servers.{n}.default_tools_approval_mode=\"approve\""));
+            // O Codex descarta em silencio um servidor MCP que nao inicializa no prazo (padrao 10 s) e o modelo
+            // fica sem nenhuma ferramenta dots_*/flexi_* naquele turno. Prazo maior para maquinas carregadas;
+            // o limite por chamada acompanha o maior tempo de comando/navegador do runtime.
+            args.push("-c".into());
+            args.push(format!("mcp_servers.{n}.startup_timeout_sec={GATEWAY_STARTUP_TIMEOUT_SEC}"));
+            args.push("-c".into());
+            args.push(format!("mcp_servers.{n}.tool_timeout_sec={GATEWAY_TOOL_TIMEOUT_SEC}"));
             // `enabled=false` sozinho falha para servidores que vem de plugins ("invalid transport"): um comando
             // inofensivo da ao override um transporte valido. Os do config.toml ja tem transporte, e `command` num
             // servidor por `url` falha ("url is not supported for stdio"): esses levam so `enabled=false`
@@ -246,6 +258,7 @@ mod tests {
         assert!(a.contains("mcp_servers.dots.args=[\"mcp-gateway\"]"));
         assert!(a.contains("mcp_servers.dots.env={DOTS_EXECUTION_TOKEN=\"tok\"}"));
         assert!(a.contains("default_tools_approval_mode=\"approve\""));
+        assert!(a.contains("mcp_servers.dots.startup_timeout_sec=60") && a.contains("mcp_servers.dots.tool_timeout_sec=900"), "prazos do gateway: {a}");
         assert!(a.contains("mcp_servers.cua_repl.command=\"/usr/bin/true\" -c mcp_servers.cua_repl.enabled=false") && a.contains("mcp_servers.node_repl.enabled=false"), "computer use do Codex desligado: {a}");
         assert!(!a.contains("mcp_servers.dots.enabled=false"));
         assert!(a.ends_with(" -"));
