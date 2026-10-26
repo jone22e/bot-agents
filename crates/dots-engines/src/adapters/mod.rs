@@ -79,7 +79,7 @@ pub(crate) fn default_finish(exit_code: Option<i32>, timed_out: bool, cancelled:
 /// Heuristica simples sobre o texto de erro do CLI.
 pub(crate) fn classify_failure(text: &str) -> FailureKind {
     let t = text.to_lowercase();
-    if t.contains("not logged in") || t.contains("unauthorized") || t.contains("401") || t.contains("api key") || t.contains("login") || t.contains("authentication") {
+    if t.contains("not logged in") || t.contains("unauthorized") || t.contains("http 401") || t.contains("status 401") || t.contains("status code 401") || t.contains("api key") || t.contains("login") || t.contains("authentication") {
         FailureKind::Auth
     } else if t.contains("budget") {
         FailureKind::Budget
@@ -87,6 +87,18 @@ pub(crate) fn classify_failure(text: &str) -> FailureKind {
         FailureKind::Config
     } else {
         FailureKind::Engine
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn thread_id_with_401_is_not_an_auth_error() {
+        let error = "thread-store conflict: thread 01a178a3-88fd-70e3-8cbe-5b04015c3e already has an active writer";
+        assert_eq!(classify_failure(error), FailureKind::Engine);
+        assert_eq!(classify_failure("HTTP 401 Unauthorized"), FailureKind::Auth);
     }
 }
 
