@@ -48,6 +48,9 @@ pub fn catalog() -> &'static [FlexiTool] {
         FlexiTool { name: "flexi_anuncios_geral", description: "Lista paginada da Gestao de anuncios, com filtros por marketplace e conta.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_fila_inativos_com_vendas", description: "Fila Inativos que ja venderam do Mercado Livre, na ordem da tela (vendas desc, id desc). Sem filtros, retorna os pendentes da primeira pagina; use items[0] como primeiro item somente apos status 1. Aceita pagina, busca, conta e situacao da revisao.", method: "GET", path: "/api/marketplaces/anuncios/inativos-com-vendas", params_in: ParamsIn::Query, params: &[("search", "string", "titulo, MLB, SKU ou id interno", false), ("conta_id", "integer", "id da conta Mercado Livre", false), ("revisao", "string", "pendentes (padrao), revisados ou todos", false), ("page", "integer", "pagina (padrao 1)", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_registrar_acao_inativo", description: "Registra na fila a acao tomada em um anuncio inativo, somente depois de confirmar a publicacao e seu MLB. Nao publica o anuncio. Use o id interno retornado pela fila.", method: "POST", path: "/api/marketplaces/anuncios/inativos-com-vendas/{id}/acao", params_in: ParamsIn::Body, params: &[("id", "integer", "id interno do anuncio", true), ("acao_tomada", "string", "publicado_mesmo_mlb ou publicado_novo_mlb", true)], risk: W, group: "anuncios" },
+        FlexiTool { name: "flexi_recuperacao_anuncios_ml", description: "Lista casos de Recuperacao de Anuncios ML na ordem da tela (deteccao mais antiga primeiro), com MLB, conta, ultimo status remoto observado, last_seen_at, estoque e diagnostico. Consulte prioridade high e depois low; confira status 1 e dados.items, dados.total. O status observado nao confirma o estado remoto atual. Nao depende da navegacao da tela.", method: "GET", path: "/api/precificacao/mercadolivre/recuperacao-anuncios", params_in: ParamsIn::Query, params: &[("prioridade", "string", "high ou low (padrao high)", false), ("pagina", "integer", "pagina (padrao 1)", false), ("limite", "integer", "itens por pagina (10 a 100, padrao 25)", false), ("busca", "string", "MLB, titulo ou referencia", false), ("conta_id", "integer", "id da conta ML", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_verificar_recuperacao_ml", description: "Consulta o Mercado Livre para um caso de recuperacao e conclui o caso somente se o anuncio estiver ativo. Use o id do CASO retornado por flexi_recuperacao_anuncios_ml, nao o id do anuncio.", method: "POST", path: "/api/precificacao/mercadolivre/recuperacao-anuncios/{id}/concluir", params_in: ParamsIn::Body, params: &[("id", "string", "id do caso de recuperacao", true)], risk: W, group: "anuncios" },
+        FlexiTool { name: "flexi_resolver_recuperacao_ml", description: "Tenta resolver automaticamente um caso de recuperacao ML. Pode modificar/publicar o anuncio; exige aprovacao. Use apenas se diagnostico.resolucao_automatica.disponivel for true e com o id do CASO retornado pela fila. Leia o resultado e confirme o estado remoto antes de contar a acao.", method: "POST", path: "/api/precificacao/mercadolivre/recuperacao-anuncios/{id}/resolver-automaticamente", params_in: ParamsIn::Body, params: &[("id", "string", "id do caso de recuperacao", true)], risk: C, group: "anuncios" },
         FlexiTool { name: "flexi_buscar_anuncio_gestao", description: "Busca na listagem da Gestao pelo MLB exato (ou outro termo), com marketplace 0 para Mercado Livre. Confira status 1, paginacao.total_registros e MLB/ID da linha. Se vier vazia ou falhar e o ID interno for conhecido, consulte flexi_anuncios com ids:[ID] antes de relatar divergencia. Estado e preco locais nao confirmam o remoto.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("busca", "string", "MLB exato ou termo de busca", true), ("marketplace", "integer", "0 Mercado Livre", true), ("pagina", "integer", "pagina (padrao 1)", false), ("por_pagina", "integer", "itens por pagina (padrao 50)", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_status", description: "Consulta o resultado resumido e a proxima data de verificacao de 1 a 200 familias, sem iniciar nova verificacao. Exemplo ids='155'. Nao inclui os achados; use flexi_familia_verificacao_detalhe para investigar erro ou alerta.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/status", params_in: ParamsIn::Query, params: &[("ids", "string", "IDs de familia separados por virgula, ex.: 155", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_detalhe", description: "Consulta o ultimo diagnostico persistido da familia, incluindo achados, erro e data. Somente leitura; nao inicia nova verificacao. Se nao houver registro, informe que o motivo ainda nao esta disponivel.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/{id}/verificacao", params_in: ParamsIn::Query, params: &[("id", "integer", "id da familia marketplace", true)], risk: R, group: "anuncios" },
@@ -266,5 +269,29 @@ mod tests {
         assert_eq!(path, "/api/produtos/familias-marketplace/diagnostico/familias/155/verificacao");
         assert_eq!(query.unwrap(), json!({}));
         assert!(body.is_none());
+    }
+
+    #[test]
+    fn recovery_tools_use_case_id_and_prioritized_queue() {
+        let queue = find_tool("flexi_recuperacao_anuncios_ml").unwrap();
+        assert_eq!(queue.risk, ToolRisk::Read);
+        let (path, query, body) = build_request(queue, &json!({
+            "prioridade": "high", "pagina": 1, "limite": 25
+        })).unwrap();
+        assert_eq!(path, "/api/precificacao/mercadolivre/recuperacao-anuncios");
+        assert_eq!(query.unwrap(), json!({ "prioridade": "high", "pagina": 1, "limite": 25 }));
+        assert!(body.is_none());
+
+        for (name, suffix, risk) in [
+            ("flexi_verificar_recuperacao_ml", "concluir", ToolRisk::Write),
+            ("flexi_resolver_recuperacao_ml", "resolver-automaticamente", ToolRisk::Critical),
+        ] {
+            let tool = find_tool(name).unwrap();
+            assert_eq!(tool.risk, risk);
+            let (path, query, body) = build_request(tool, &json!({ "id": "123" })).unwrap();
+            assert_eq!(path, format!("/api/precificacao/mercadolivre/recuperacao-anuncios/123/{suffix}"));
+            assert!(query.is_none());
+            assert_eq!(body.unwrap(), json!({}));
+        }
     }
 }
