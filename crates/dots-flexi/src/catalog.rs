@@ -45,7 +45,11 @@ pub fn catalog() -> &'static [FlexiTool] {
         FlexiTool { name: "flexi_mercadolivre_modo_ferias", description: "Liga/desliga o modo ferias de uma conta Mercado Livre.", method: "POST", path: "/api/marketplaces/mercadolivre/contas/{id}/modo-ferias", params_in: ParamsIn::Body, params: &[("id", "integer", "id da conta", true), ("ativo", "boolean", "true para ativar", true)], risk: C, group: "contas" },
         // ---- anuncios: consulta
         FlexiTool { name: "flexi_anuncios", description: "Consulta anuncios do Flexi. Filtre por marketplace (0 ML, 1 Shopee, 2 Google Shopping), marketplace_conta_id, produto_id, produto_familia_marketplace_id ou ids (lista de ids de anuncio). Retorna titulo, preco, estoque, status, vendas, visitas, ids externos.", method: "POST", path: "/api/gestao-marketplaces/anuncios", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "0 Mercado Livre, 1 Shopee, 2 Google Shopping", false), ("marketplace_conta_id", "integer", "", false), ("produto_id", "integer", "", false), ("produto_familia_marketplace_id", "integer", "", false), ("ids", "array", "ids de anuncio (produto_marketplace.id)", false), ("incluir_preco_ultima_venda", "integer", "1 para incluir", false)], risk: R, group: "anuncios" },
-        FlexiTool { name: "flexi_anuncios_geral", description: "Visao geral dos anuncios (totais e status por marketplace/conta).", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_anuncios_geral", description: "Lista paginada da Gestao de anuncios, com filtros por marketplace e conta.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_fila_inativos_com_vendas", description: "Fila Inativos que ja venderam do Mercado Livre, na ordem da tela (vendas desc, id desc). Sem filtros, retorna os pendentes da primeira pagina; use items[0] como primeiro item somente apos status 1. Aceita pagina, busca, conta e situacao da revisao.", method: "GET", path: "/api/marketplaces/anuncios/inativos-com-vendas", params_in: ParamsIn::Query, params: &[("search", "string", "titulo, MLB, SKU ou id interno", false), ("conta_id", "integer", "id da conta Mercado Livre", false), ("revisao", "string", "pendentes (padrao), revisados ou todos", false), ("page", "integer", "pagina (padrao 1)", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_registrar_acao_inativo", description: "Registra na fila a acao tomada em um anuncio inativo, somente depois de confirmar a publicacao e seu MLB. Nao publica o anuncio. Use o id interno retornado pela fila.", method: "POST", path: "/api/marketplaces/anuncios/inativos-com-vendas/{id}/acao", params_in: ParamsIn::Body, params: &[("id", "integer", "id interno do anuncio", true), ("acao_tomada", "string", "publicado_mesmo_mlb ou publicado_novo_mlb", true)], risk: W, group: "anuncios" },
+        FlexiTool { name: "flexi_buscar_anuncio_gestao", description: "Busca na mesma listagem da Gestao pelo MLB exato (ou outro termo), com marketplace 0 para Mercado Livre. Confirme status 1, paginacao.total_registros e o MLB/ID da linha antes de agir; erro ou lista vazia nao prova ausencia no banco.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("busca", "string", "MLB exato ou termo de busca", true), ("marketplace", "integer", "0 Mercado Livre", true), ("pagina", "integer", "pagina (padrao 1)", false), ("por_pagina", "integer", "itens por pagina (padrao 50)", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_familia_verificacao_status", description: "Consulta o resultado e a proxima data de verificacao de 1 a 200 familias, sem iniciar nova verificacao. Exemplo ids='155'. Resultado erro ou alerta exige examinar os achados, nao significa apenas prazo vencido.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/status", params_in: ParamsIn::Query, params: &[("ids", "string", "IDs de familia separados por virgula, ex.: 155", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_vendas", description: "Vendas por anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/vendas", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", false), ("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_falha", description: "Anuncios com falha de publicacao/sincronizacao.", method: "POST", path: "/api/gestao-marketplaces/anuncios/falha", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_precos_calculados", description: "Precos calculados pelo Flexi para um anuncio (preco sugerido, preco minimo, taxas, frete). Consulte antes de alterar qualquer preco; nunca va abaixo do preco minimo.", method: "GET", path: "/api/gestao-marketplaces/anuncios/precos-calculados", params_in: ParamsIn::Query, params: &[("anuncio_id", "integer", "id do anuncio (produto_marketplace.id)", true)], risk: R, group: "anuncios" },
@@ -161,6 +165,12 @@ pub fn build_request(tool: &FlexiTool, args: &Value) -> Result<(String, Option<V
     if path.contains('{') {
         return Err("parametro de rota ausente".into());
     }
+    if tool.name == "flexi_buscar_anuncio_gestao" {
+        rest.entry("pagina").or_insert(json!(1));
+        rest.entry("por_pagina").or_insert(json!(50));
+        rest.insert("incluir_facetas_legacy".into(), json!(0));
+        rest.insert("incluir_facetas_v2".into(), json!(0));
+    }
     // Google Ads exige confirm=true explicito nas escritas.
     if tool.group == "googleads" && tool.method == "POST" {
         rest.insert("confirm".into(), Value::Bool(true));
@@ -214,5 +224,41 @@ mod tests {
             assert_eq!(query.unwrap(), json!({ "anuncio_id": 39801 }));
             assert!(body.is_none());
         }
+    }
+
+    #[test]
+    fn queue_and_exact_gestao_search_use_the_screen_contracts() {
+        let queue = find_tool("flexi_fila_inativos_com_vendas").unwrap();
+        assert_eq!(queue.risk, ToolRisk::Read);
+        let (path, query, body) = build_request(queue, &json!({})).unwrap();
+        assert_eq!(path, "/api/marketplaces/anuncios/inativos-com-vendas");
+        assert_eq!(query.unwrap(), json!({}));
+        assert!(body.is_none());
+        let action = find_tool("flexi_registrar_acao_inativo").unwrap();
+        assert_eq!(action.risk, ToolRisk::Write);
+        let (path, query, body) = build_request(action, &json!({
+            "id": 12572801, "acao_tomada": "publicado_mesmo_mlb"
+        })).unwrap();
+        assert_eq!(path, "/api/marketplaces/anuncios/inativos-com-vendas/12572801/acao");
+        assert!(query.is_none());
+        assert_eq!(body.unwrap(), json!({ "acao_tomada": "publicado_mesmo_mlb" }));
+
+        let search = find_tool("flexi_buscar_anuncio_gestao").unwrap();
+        assert_eq!(search.risk, ToolRisk::Read);
+        assert!(build_request(search, &json!({ "busca": "MLB3661151535" })).is_err());
+        let (path, query, body) = build_request(search, &json!({
+            "busca": "MLB3661151535", "marketplace": 0
+        })).unwrap();
+        assert_eq!(path, "/api/gestao-marketplaces/anuncios/geral");
+        assert!(query.is_none());
+        assert_eq!(body.unwrap(), json!({
+            "busca": "MLB3661151535", "marketplace": 0, "pagina": 1,
+            "por_pagina": 50, "incluir_facetas_legacy": 0, "incluir_facetas_v2": 0
+        }));
+        let family = find_tool("flexi_familia_verificacao_status").unwrap();
+        let (path, query, body) = build_request(family, &json!({ "ids": "155" })).unwrap();
+        assert_eq!(path, "/api/produtos/familias-marketplace/diagnostico/familias/status");
+        assert_eq!(query.unwrap(), json!({ "ids": "155" }));
+        assert!(body.is_none());
     }
 }
