@@ -217,7 +217,7 @@ async fn supervisor_coordinates_three_dots_and_consolidates() {
     let a = rt.create_dot("Alfa", "read", "worker").await;
     let b = rt.create_dot("Beta", "read", "worker").await;
     let c = rt.create_dot("Gama", "read", "worker").await;
-    let task: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Alfa,Beta,Gama:Analise o modulo X", "title": "Coordenar" })).await).unwrap();
+    let task: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE_SERIAL:Alfa,Beta,Gama:Analise o modulo X", "title": "Coordenar" })).await).unwrap();
     let done = rt.wait_task(&task.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
     assert!(done.result_text.as_deref().unwrap().starts_with("AGUARDANDO ok:"), "{:?}", done.result_text);
     for d in [&a, &b, &c] {

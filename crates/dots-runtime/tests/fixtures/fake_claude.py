@@ -75,7 +75,8 @@ elif 'dots_decide_approval(approval_id="' in prompt:
     final = "DECIDI" if ok else "FALHOU: " + out
 elif prompt.startswith("Continuacao:"):
     final = "CONSOLIDADO: " + str(prompt.count("Resultado:")) + " resultado(s)" + (" | resposta=" + prompt.split("Resposta: ",1)[1].split("\n")[0] if "Resposta: " in prompt else "")
-elif prompt.startswith("DELEGATE:"):
+elif prompt.startswith("DELEGATE:") or prompt.startswith("DELEGATE_SERIAL:"):
+    serial = prompt.startswith("DELEGATE_SERIAL:")
     _, names, request = prompt.split(":", 2)
     g = Gateway()
     ok, team = g.call("dots_list_team", {})
@@ -85,6 +86,15 @@ elif prompt.startswith("DELEGATE:"):
         ok, out = g.call("dots_delegate", {"to": n.strip(), "request": request})
         tool("dots_delegate", {"to": n.strip(), "request": request}, ok, out)
         outs.append(("ok" if ok else "ERRO") + ":" + out[:80])
+        if serial and ok:
+            delegation_id = out.split("Delegacao ", 1)[1].split(" ", 1)[0]
+            for _ in range(100):
+                _, state = g.call("dots_delegation_status", {"id": delegation_id})
+                if ": completed" in state:
+                    break
+                time.sleep(0.05)
+            else:
+                raise RuntimeError(f"delegacao {delegation_id} nao terminou")
     final = "AGUARDANDO " + " | ".join(outs)
 elif prompt.startswith("ASK:"):
     ok, out = Gateway().call("dots_ask_user", {"question": prompt.split(":", 1)[1], "options": ["Postgres", "SQLite"]})

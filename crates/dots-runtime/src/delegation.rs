@@ -347,7 +347,13 @@ impl RuntimeService {
         // Serializa a verificacao da origem e a criacao da continuacao quando entregas terminam juntas.
         let _finish_guard = self.delegation_finish_lock.lock().await;
         let child_id = task.id.clone();
-        let Ok(Some(d)) = self.storage.call(move |st| st.delegations().by_child(&child_id)).await else { return };
+        let Ok(delegation) = self.storage.call(move |st| st.delegations().by_child(&child_id)).await else { return };
+        let Some(d) = delegation else {
+            // O gerente pode terminar depois de todos os funcionarios. So agora sabemos
+            // que ele nao criara mais delegacoes para esta tarefa.
+            self.consolidate_finished_delegations(&task.id).await;
+            return;
+        };
         // Terminou perguntando: a delegacao segue aberta ate a resposta e a continuacao (que vira a nova filha).
         if status == TaskStatus::Completed && self.has_pending_question(&task.id).await {
             return;
@@ -372,7 +378,7 @@ impl RuntimeService {
         if parent.status == TaskStatus::Cancelled || parent.cancel_requested {
             return;
         }
-        if siblings.iter().any(|s| !s.status.is_terminal()) {
+        if !parent.status.is_terminal() || siblings.iter().any(|s| !s.status.is_terminal()) {
             let attempt = self.storage.call({ let id = task.id.clone(); move |st| Ok(st.tasks().get(&id)?.attempts) }).await.unwrap_or(0);
             let origin = format!("delegation_update:{}:{attempt}", d.id);
             let already = self.storage.call({ let origin = origin.clone(); move |st| st.tasks().exists_origin(&origin) }).await.unwrap_or(false);
@@ -402,6 +408,20 @@ impl RuntimeService {
                     Err(e) => tracing::warn!(parent = %parent.id, error = %e, "falha ao criar acompanhamento parcial"),
                 }
             }
+            return;
+        }
+        self.consolidate_finished_delegations(&parent.id).await;
+    }
+
+    /// Chamada com delegation_finish_lock adquirido: evita consolidar uma lista ainda
+    /// incompleta enquanto o gerente esta registrando outras delegacoes.
+    async fn consolidate_finished_delegations(&self, parent_id: &str) {
+        let parent_id = parent_id.to_string();
+        let (parent, siblings) = match self.storage.call(move |st| Ok((st.tasks().get(&parent_id)?, st.delegations().for_parent(&parent_id)?))).await {
+            Ok(x) => x,
+            Err(_) => return,
+        };
+        if siblings.is_empty() || !parent.status.is_terminal() || parent.status == TaskStatus::Cancelled || parent.cancel_requested || siblings.iter().any(|s| !s.status.is_terminal()) {
             return;
         }
         // Consolidacao final quando todas as delegacoes da tarefa pai terminaram.
