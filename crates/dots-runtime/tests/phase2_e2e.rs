@@ -306,7 +306,21 @@ async fn restart_recovers_interrupted_tasks() {
     rt.use_fake_engine().await;
     let dot = rt.create_dot("R", "read").await;
     let safe: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": dot.id, "prompt": "SLEEP:30", "retry_safe": true })).await).unwrap();
-    rt.wait_task(&safe.id, &[TaskStatus::Running], Duration::from_secs(10)).await;
+    // RUNNING e o registro da execucao sao persistidos em operacoes separadas.
+    // Espere a primeira execucao existir antes de simular a queda do runtime.
+    let start = Instant::now();
+    loop {
+        let v = rt.call("tasks.get", json!({ "id": safe.id })).await;
+        let t: Task = serde_json::from_value(v["task"].clone()).unwrap();
+        let execs: Vec<Execution> = serde_json::from_value(v["executions"].clone()).unwrap();
+        if t.status == TaskStatus::Running
+            && execs.iter().any(|e| e.attempt == 1 && e.status == ExecutionStatus::Running)
+        {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "primeira execucao nao iniciou: {t:?} {execs:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     // Mata o runtime sem encerramento ordenado
     unsafe { libc::kill(rt.child.id() as i32, libc::SIGKILL) };
     let _ = rt.child.wait();
