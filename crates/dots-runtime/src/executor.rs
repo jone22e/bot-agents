@@ -133,6 +133,22 @@ impl RuntimeService {
         let flexi_conn = self.flexi_connection_for_dot(&dot_id).await.ok().flatten();
         let flexi_context = flexi_conn.as_ref().map(|_| crate::flexi::FLEXI_CONTEXT);
         let app_hosts: Vec<String> = flexi_conn.iter().map(|c| crate::policy::url_host(&c.base_url)).filter(|h| !h.is_empty()).collect();
+        let mut effective_dot = dot.clone();
+        let integration = self.storage.call({ let d = dot_id.clone(); move |s| s.apps().integration(&d, crate::flexi::KIND) }).await?;
+        if let Some(integration) = integration.filter(|value| value.role_template.is_some()) {
+            let role_template = integration.role_template.as_deref().unwrap_or_default();
+            match self.flexi_fetch_templates(Some(&integration.connection_id)).await {
+                Ok(templates) => {
+                    effective_dot.instructions = crate::flexi_team::instructions_for_template(&templates, role_template)?;
+                }
+                Err(error) if crate::flexi_team::builtin_templates().iter().any(|template|
+                    template.id == role_template && template.purpose == dot.instructions
+                ) => {
+                    tracing::warn!(role_template, error = %error, "Flexi antigo: usando instrucoes embutidas originais");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         // Instrucoes estaveis por DOT vao no system prompt (iguais entre turnos: preservam o cache do CLI);
         // o que muda a cada tarefa (memorias, checkpoint, estado de trabalho) vai no prompt da tarefa.
         // Funcionario de equipe nao avisa o usuario (dots_notify_user): relata ao gerente.
@@ -141,7 +157,7 @@ impl RuntimeService {
             let Some(mid) = team.manager_dot_id else { return Ok(None) };
             Ok(Some(s.dots().get(&mid)?.name))
         } }).await.ok().flatten();
-        let system_instructions = build_instructions(&dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring, manager_name.as_deref());
+        let system_instructions = build_instructions(&effective_dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring, manager_name.as_deref());
         // Conversa com turnos anteriores do DOT mas sem sessao do motor: a sessao foi encerrada (por tamanho ou falha).
         let session_reset = resume_session.is_none()
             && match &task.conversation_id {

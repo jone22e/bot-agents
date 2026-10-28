@@ -234,6 +234,7 @@ async fn mfa_connect_and_team_creation() {
     let integ = integ.unwrap();
     assert_eq!(integ.connection_id, c.id);
     assert_eq!(integ.work_group.as_deref(), Some("mercadolivre"));
+    assert_eq!(rt.run(manager, "HAS_SYSTEM:Gerencia a conta Mercado Livre").await.result_text.as_deref(), Some("PRESENTE"), "gerente legado continua executando sem a rota nova");
     rt.stop();
 }
 
@@ -273,6 +274,32 @@ async fn templates_come_from_flexi_especialidades() {
     let integ: Option<DotIntegration> = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": w.id, "kind": "flexi" })).await).unwrap();
     assert_eq!(integ.unwrap().work_group, None);
     assert!(rt.try_call("apps.flexi.assign_role", json!({ "dot_id": d.id, "connection_id": c.id, "template_id": "mkt_manager" })).await.is_err(), "especialidade com setor fora da lista");
+    rt.stop();
+}
+
+#[tokio::test]
+async fn configured_subspecialty_reaches_manager_and_employee_after_edit() {
+    let flexi = Flexi::start_at(false, 185).await;
+    let rt = start().await;
+    let c: AppConnection = serde_json::from_value(rt.call("apps.flexi.connect", json!({ "base_url": flexi.url, "email": "agente@teste.com", "senha": "segredo123" })).await).unwrap();
+    reqwest::get(format!("{}/__especialidades", flexi.url)).await.unwrap();
+    rt.call("apps.flexi.create_team", json!({ "id": c.id })).await;
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    let manager = dots.iter().find(|dot| dot.name == "Gerente de Mercado Livre").unwrap();
+    assert_eq!(rt.run(manager, "HAS_SYSTEM:Rotina versao inicial.").await.result_text.as_deref(), Some("PRESENTE"));
+
+    let hired = rt.run(manager, r#"FLEXI:dots_hire_employee:{"name":"Bia","role":"Recuperadora","subespecialidade":"recuperacao"}"#).await;
+    assert!(hired.result_text.as_deref().unwrap_or_default().starts_with("OK 'Bia' foi contratado"), "{:?}", hired.result_text);
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    let employee = dots.iter().find(|dot| dot.name == "Bia").unwrap();
+    let integration: Option<DotIntegration> = serde_json::from_value(rt.call("dots.integration", json!({ "dot_id": employee.id, "kind": "flexi" })).await).unwrap();
+    assert_eq!(integration.unwrap().role_template.as_deref(), Some("sub:ml_manager:recuperacao"));
+    assert_eq!(rt.run(employee, "HAS_SYSTEM:Rotina versao inicial.").await.result_text.as_deref(), Some("PRESENTE"));
+
+    reqwest::get(format!("{}/__especialidades_update", flexi.url)).await.unwrap();
+    assert_eq!(rt.run(manager, "HAS_SYSTEM:Rotina versao atualizada.").await.result_text.as_deref(), Some("PRESENTE"));
+    assert_eq!(rt.run(employee, "HAS_SYSTEM:Rotina versao atualizada.").await.result_text.as_deref(), Some("PRESENTE"));
+    assert_eq!(rt.run(employee, "HAS_SYSTEM:Rotina versao inicial.").await.result_text.as_deref(), Some("AUSENTE"));
     rt.stop();
 }
 

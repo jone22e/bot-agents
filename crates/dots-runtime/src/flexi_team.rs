@@ -12,6 +12,39 @@ use crate::service::RuntimeService;
 
 /// Rota do Flexi com as especialidades do aplicativo Agentes DOTS (cadastradas em Configuracoes > Aplicativos).
 pub const ESPECIALIDADES_PATH: &str = "/api/sub-aplicativos/agentes-dots/especialidades";
+const SUBESPECIALIDADE_PREFIX: &str = "sub:";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FlexiSubspecialty {
+    pub id: String,
+    pub name: String,
+    pub instructions: String,
+}
+
+pub fn subspecialty_template_id(manager_id: &str, subspecialty_id: &str) -> String {
+    format!("{SUBESPECIALIDADE_PREFIX}{manager_id}:{subspecialty_id}")
+}
+
+fn parse_subspecialty_template_id(value: &str) -> Option<(&str, &str)> {
+    let (manager, sub) = value.strip_prefix(SUBESPECIALIDADE_PREFIX)?.split_once(':')?;
+    (!manager.is_empty() && !sub.is_empty()).then_some((manager, sub))
+}
+
+pub fn instructions_for_template(templates: &[FlexiRoleTemplate], role_template: &str) -> DotsResult<String> {
+    if let Some((manager_id, sub_id)) = parse_subspecialty_template_id(role_template) {
+        let sub = templates.iter().find(|template| template.id == manager_id)
+            .and_then(|template| template.subspecialties.iter().find(|sub| sub.id == sub_id))
+            .ok_or_else(|| DotsError::Validation(format!("subespecialidade {sub_id} nao encontrada no Flexi")))?;
+        return Ok(sub.instructions.clone());
+    }
+    let manager = templates.iter().find(|template| template.id == role_template)
+        .ok_or_else(|| DotsError::Validation(format!("especialidade {role_template} nao encontrada no Flexi")))?;
+    let mut instructions = manager.purpose.clone();
+    for sub in &manager.subspecialties {
+        instructions.push_str(&format!("\n\n## Rotina: {} (codigo {})\n{}", sub.name, sub.id, sub.instructions));
+    }
+    Ok(instructions)
+}
 
 /// Especialidade e sempre de gerente: ele contrata os funcionarios (dots_hire_employee) e define o que cada um faz.
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +55,7 @@ pub struct FlexiRoleTemplate {
     pub role: DotRole,
     pub trust: AutoApproveLevel,
     pub purpose: String,
+    pub subspecialties: Vec<FlexiSubspecialty>,
     /// Setor do sistema no Flexi (ex.: `mercadolivre`, `compras`); vira a area de trabalho do DOT.
     pub group: String,
     /// Nome do setor (ex.: "Mercado Livre").
@@ -37,6 +71,7 @@ fn build(id: &str, name: &str, group: &str, group_name: &str, trust: AutoApprove
         role: DotRole::Supervisor,
         trust,
         purpose,
+        subspecialties: vec![],
         group: group.to_string(),
         group_name: group_name.to_string(),
         manages: Some(group_name.to_string()),
@@ -56,7 +91,17 @@ pub fn templates_from_flexi(v: &Value) -> Vec<FlexiRoleTemplate> {
                 return None;
             }
             let trust = if s("permissao") == "write" { AutoApproveLevel::Write } else { AutoApproveLevel::Read };
-            Some(build(&id, &name, &group, &group_name, trust, s("instrucoes")))
+            let mut template = build(&id, &name, &group, &group_name, trust, s("instrucoes"));
+            template.subspecialties = it.get("subespecialidades").and_then(Value::as_array)
+                .into_iter().flatten()
+                .filter_map(|sub| {
+                    let value = |key| sub.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let (id, name, instructions) = (value("codigo"), value("nome"), value("instrucoes"));
+                    (!id.is_empty() && !name.is_empty() && !instructions.is_empty())
+                        .then_some(FlexiSubspecialty { id, name, instructions })
+                })
+                .collect();
+            Some(template)
         })
         .collect()
 }
@@ -95,7 +140,7 @@ impl RuntimeService {
         }
     }
 
-    async fn flexi_fetch_templates(&self, connection_id: Option<&str>) -> DotsResult<Vec<FlexiRoleTemplate>> {
+    pub(crate) async fn flexi_fetch_templates(&self, connection_id: Option<&str>) -> DotsResult<Vec<FlexiRoleTemplate>> {
         let id = connection_id.map(str::to_string);
         let conn = self
             .storage
@@ -118,13 +163,24 @@ impl RuntimeService {
         if matches!(result, Err(FlexiError::Unauthenticated(_))) && self.flexi_relogin(&conn, client.clone()).await?.status == ConnectionStatus::Connected {
             result = client.call("GET", ESPECIALIDADES_PATH, None, None).await;
         }
-        result.map(|v| templates_from_flexi(&v)).map_err(|e| DotsError::Validation(e.to_string()))
+        result.map(|v| {
+            let templates = templates_from_flexi(&v);
+            *self.flexi.templates.lock().unwrap() = Some(templates.clone());
+            templates
+        }).map_err(|e| DotsError::Validation(e.to_string()))
     }
 
     /// Codigo da especialidade -> nome (cargo), pela ultima lista lida do Flexi.
     pub fn flexi_role_names(&self) -> HashMap<String, String> {
         let list = self.flexi.templates.lock().unwrap().clone().unwrap_or_else(builtin_templates);
-        list.into_iter().map(|t| (t.id, t.name)).collect()
+        let mut names = HashMap::new();
+        for template in list {
+            for sub in &template.subspecialties {
+                names.insert(subspecialty_template_id(&template.id, &sub.id), sub.name.clone());
+            }
+            names.insert(template.id, template.name);
+        }
+        names
     }
 
     /// Cria a equipe completa ligada a conexao, com delegacao configurada.
@@ -215,7 +271,9 @@ mod tests {
     #[test]
     fn flexi_items_become_managers() {
         let v = json!({ "items": [
-            { "codigo": "gerente_compras", "nome": "Gerente de Compras", "setor": "compras", "setor_nome": "Compras", "permissao": "write", "instrucoes": "Coordena." },
+            { "codigo": "gerente_compras", "nome": "Gerente de Compras", "setor": "compras", "setor_nome": "Compras", "permissao": "write", "instrucoes": "Coordena.", "subespecialidades": [
+                { "codigo": "reposicao", "nome": "Reposicao", "instrucoes": "Verifique estoque." }
+            ] },
             { "codigo": "mkt_manager", "nome": "Gerente de Marketplaces", "setor": "marketplaces", "setor_nome": "", "permissao": "read", "instrucoes": "x" },
             { "codigo": "", "nome": "Sem codigo", "setor": "rh", "setor_nome": "RH", "permissao": "read", "instrucoes": "" }
         ] });
@@ -224,6 +282,10 @@ mod tests {
         assert_eq!(list[0].role, DotRole::Supervisor);
         assert_eq!(list[0].trust, AutoApproveLevel::Write);
         assert_eq!((list[0].group.as_str(), list[0].manages.as_deref()), ("compras", Some("Compras")));
+        assert_eq!(list[0].subspecialties.len(), 1);
+        assert!(instructions_for_template(&list, "gerente_compras").unwrap().contains("Verifique estoque."));
+        assert_eq!(instructions_for_template(&list, "sub:gerente_compras:reposicao").unwrap(), "Verifique estoque.");
+        assert!(instructions_for_template(&list, "sub:gerente_compras:nao_existe").is_err());
         assert!(templates_from_flexi(&json!({ "status": 1 })).is_empty());
     }
 }

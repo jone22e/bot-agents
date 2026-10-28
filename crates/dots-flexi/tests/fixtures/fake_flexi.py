@@ -78,10 +78,14 @@ class H(BaseHTTPRequestHandler):
             SESSIONS.clear(); return self._json(200, {"ok": True})
         if path == "/__especialidades":  # utilitario de teste: liga a rota de especialidades (sem isso, Flexi antigo = 404)
             STATE["especialidades"] = [
-                {"id": 2, "codigo": "ml_manager", "nome": "Gerente de Mercado Livre", "setor": "mercadolivre", "setor_nome": "Mercado Livre", "permissao": "read", "instrucoes": "Coordena o Mercado Livre.", "ordem": 2},
+                {"id": 2, "codigo": "ml_manager", "nome": "Gerente de Mercado Livre", "setor": "mercadolivre", "setor_nome": "Mercado Livre", "permissao": "read", "instrucoes": "Coordena o Mercado Livre.", "subespecialidades": [{"codigo": "recuperacao", "nome": "Recuperacao", "instrucoes": "Rotina versao inicial."}], "ordem": 2},
                 {"id": 12, "codigo": "gerente_de_compras", "nome": "Gerente de Compras", "setor": "compras", "setor_nome": "Compras", "permissao": "write", "instrucoes": "Coordena as compras.", "ordem": 12},
                 {"id": 1, "codigo": "mkt_manager", "nome": "Gerente de Marketplaces", "setor": "marketplaces", "setor_nome": "", "permissao": "read", "instrucoes": "Setor fora da lista.", "ordem": 1},
             ]
+            return self._json(200, {"ok": True})
+        if path == "/__especialidades_update":
+            if STATE["especialidades"] is not None:
+                STATE["especialidades"][0]["subespecialidades"][0]["instrucoes"] = "Rotina versao atualizada."
             return self._json(200, {"ok": True})
         if path == "/api/sub-aplicativos/agentes-dots/especialidades":
             if STATE["especialidades"] is None: return self._json(404, {"message": "Route GET:/api/sub-aplicativos/agentes-dots/especialidades not found", "error": "Not Found"})

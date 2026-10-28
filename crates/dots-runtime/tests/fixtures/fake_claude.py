@@ -161,6 +161,8 @@ elif prompt.startswith("RECALL:"):
     final = out
 elif prompt.startswith("ECHO_SYSTEM"):
     final = sysprompt[:300]
+elif prompt.startswith("HAS_SYSTEM:"):
+    final = "PRESENTE" if prompt.split(":", 1)[1] in sysprompt else "AUSENTE"
 elif prompt.startswith("ECHO_CONTEXT"):
     final = taskctx[:600]
 

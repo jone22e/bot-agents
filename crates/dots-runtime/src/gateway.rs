@@ -338,7 +338,7 @@ impl RuntimeService {
             "dots_goal_list" => self.goal_list_for_dot(ctx).await,
             "dots_goal_close" => self.goal_close_for_dot(ctx, &s("id"), &s("status")).await,
             "dots_dismiss_employee" => self.dismiss_employee(ctx, &s("dot"), &s("reason"), &s("lesson")).await,
-            "dots_hire_employee" => self.hire_employee(ctx, &s("name"), &s("role"), &s("instructions")).await,
+            "dots_hire_employee" => self.hire_employee(ctx, &s("name"), &s("role"), &s("instructions"), &s("subespecialidade")).await,
             "dots_pause_employee" => self.set_employee_status(ctx, &s("dot"), DotStatus::Paused, &s("reason")).await,
             "dots_resume_employee" => self.set_employee_status(ctx, &s("dot"), DotStatus::Active, "").await,
             "dots_ask_user" => self.ask_user(ctx, &s("question"), args.get("options").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()).await,
