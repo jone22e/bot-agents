@@ -46,12 +46,16 @@ pub fn catalog() -> &'static [FlexiTool] {
         // ---- anuncios: consulta
         FlexiTool { name: "flexi_anuncios", description: "Consulta anuncios locais do Flexi por ids, produto_id ou produto_familia_marketplace_id. Informe ao menos um desses filtros; so marketplace/conta devolve lista vazia. Para um ID interno conhecido, use ids:[ID] e confira id, MLB, conta, preco local e status da mesma linha; produto pode ter anuncios em contas diferentes. Historico de preco nao e preco atual nem confirma estado remoto.", method: "POST", path: "/api/gestao-marketplaces/anuncios", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "0 Mercado Livre, 1 Shopee, 2 Google Shopping", false), ("marketplace_conta_id", "integer", "", false), ("produto_id", "integer", "", false), ("produto_familia_marketplace_id", "integer", "", false), ("ids", "array", "ids de anuncio (produto_marketplace.id)", false), ("incluir_preco_ultima_venda", "integer", "1 para incluir", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_geral", description: "Lista paginada da Gestao de anuncios, com filtros por marketplace e conta.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
-        FlexiTool { name: "flexi_fila_inativos_com_vendas", description: "Fila Inativos que ja venderam do Mercado Livre, na ordem da tela (vendas desc, id desc). Sem filtros, retorna os pendentes da primeira pagina; use items[0] como primeiro item somente apos status 1. Aceita pagina, busca, conta e situacao da revisao.", method: "GET", path: "/api/marketplaces/anuncios/inativos-com-vendas", params_in: ParamsIn::Query, params: &[("search", "string", "titulo, MLB, SKU ou id interno", false), ("conta_id", "integer", "id da conta Mercado Livre", false), ("revisao", "string", "pendentes (padrao), revisados ou todos", false), ("page", "integer", "pagina (padrao 1)", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_fila_vendas_interrompidas_ml", description: "Lista anuncios do Mercado Livre com vendas interrompidas, na mesma ordem da tela de analise. Retorna itens, classificacao, historico recente e revisao.", method: "GET", path: "/api/marketplaces/anuncios/vendas-interrompidas", params_in: ParamsIn::Query, params: &[("marketplace", "integer", "0 Mercado Livre", true), ("classificacao", "string", "parou_de_vender, abaixo_do_minimo, parado_ha_mais_tempo ou todos", false), ("revisao", "string", "pendentes (padrao), revisados ou todos", false), ("janela_dias", "integer", "janela de analise", false), ("pedidos_anteriores_min", "integer", "pedidos minimos no periodo anterior", false), ("page", "integer", "pagina", false), ("page_size", "integer", "itens por pagina", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_fila_inativos_com_vendas", description: "Lista anuncios inativos do Mercado Livre que ja venderam, na ordem da tela (vendas desc, id desc). Sem filtros, retorna os pendentes da primeira pagina.", method: "GET", path: "/api/marketplaces/anuncios/inativos-com-vendas", params_in: ParamsIn::Query, params: &[("search", "string", "titulo, MLB, SKU ou id interno", false), ("conta_id", "integer", "id da conta Mercado Livre", false), ("revisao", "string", "pendentes (padrao), revisados ou todos", false), ("page", "integer", "pagina (padrao 1)", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_fila_produtos_sem_anuncios_ml", description: "Lista produtos com estoque de 10 ou mais, ativos na Loja ou como variacoes, sem anuncio Mercado Livre cadastrado. Retorna id, nome, referencia e estoque; nao inclui custo nem preco.", method: "GET", path: "/api/marketplaces/produtos-sem-anuncios", params_in: ParamsIn::Query, params: &[("page", "integer", "pagina (padrao 1)", false), ("search", "string", "produto, referencia ou id", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_registrar_acao_inativo", description: "Registra na fila a acao tomada em um anuncio inativo, somente depois de confirmar a publicacao e seu MLB. Nao publica o anuncio. Use o id interno retornado pela fila.", method: "POST", path: "/api/marketplaces/anuncios/inativos-com-vendas/{id}/acao", params_in: ParamsIn::Body, params: &[("id", "integer", "id interno do anuncio", true), ("acao_tomada", "string", "publicado_mesmo_mlb ou publicado_novo_mlb", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_recuperacao_anuncios_ml", description: "Lista casos de Recuperacao de Anuncios ML na ordem da tela (deteccao mais antiga primeiro), com MLB, conta, ultimo status remoto observado, last_seen_at, estoque e diagnostico. Consulte prioridade high e low, percorrendo pagina ate dados.totalPages antes de declarar a fila sem elegiveis. O status observado nao confirma o estado remoto atual.", method: "GET", path: "/api/precificacao/mercadolivre/recuperacao-anuncios", params_in: ParamsIn::Query, params: &[("prioridade", "string", "high ou low (padrao high)", false), ("pagina", "integer", "pagina (padrao 1)", false), ("limite", "integer", "itens por pagina (10 a 100, padrao 25)", false), ("busca", "string", "MLB, titulo ou referencia", false), ("conta_id", "integer", "id da conta ML", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_verificar_recuperacao_ml", description: "Consulta o Mercado Livre para um caso e pode concluir se o remoto estiver ativo OU se o Flexi marcar o anuncio como publicado. Retorna dados.source: mercadolivre ou flexi. source flexi nao confirma estado remoto ativo. Use o id do CASO retornado pela fila.", method: "POST", path: "/api/precificacao/mercadolivre/recuperacao-anuncios/{id}/concluir", params_in: ParamsIn::Body, params: &[("id", "string", "id do caso de recuperacao", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_resolver_recuperacao_ml", description: "Tenta resolver automaticamente um caso de recuperacao ML. Pode modificar/publicar o anuncio; exige aprovacao. Use apenas se diagnostico.resolucao_automatica.disponivel for true e com o id do CASO retornado pela fila. Resultado resolved pode ser confirmado apenas pelo publicador Flexi; nao prova estado remoto ativo.", method: "POST", path: "/api/precificacao/mercadolivre/recuperacao-anuncios/{id}/resolver-automaticamente", params_in: ParamsIn::Body, params: &[("id", "string", "id do caso de recuperacao", true)], risk: C, group: "anuncios" },
         FlexiTool { name: "flexi_buscar_anuncio_gestao", description: "Busca na listagem da Gestao pelo MLB exato (ou outro termo), com marketplace 0 para Mercado Livre. Confira status 1, paginacao.total_registros e MLB/ID da linha. Se vier vazia ou falhar e o ID interno for conhecido, consulte flexi_anuncios com ids:[ID] antes de relatar divergencia. Estado e preco locais nao confirmam o remoto.", method: "POST", path: "/api/gestao-marketplaces/anuncios/geral", params_in: ParamsIn::Body, params: &[("busca", "string", "MLB exato ou termo de busca", true), ("marketplace", "integer", "0 Mercado Livre", true), ("pagina", "integer", "pagina (padrao 1)", false), ("por_pagina", "integer", "itens por pagina (padrao 50)", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_status_remoto_anuncio_ml", description: "Consulta, sem alterar dados, o status atual no Mercado Livre do MLB vinculado a um anuncio local. Retorna listingId, accountId, remoteStatus, remoteActive e status local, ou o motivo de indisponibilidade/divergencia.", method: "GET", path: "/api/precificacao/mercadolivre/anuncios/{id}/status-remoto", params_in: ParamsIn::Query, params: &[("id", "integer", "id interno do anuncio (produto_marketplace.id)", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_sincronizar_status_anuncio_ml", description: "Solicita reconciliacao do status local pela fila do Flexi apos consulta remota. Retorna a decisao de enfileiramento; a resposta nao confirma conclusao da sincronizacao.", method: "POST", path: "/api/precificacao/mercadolivre/anuncios/{id}/sincronizar-status", params_in: ParamsIn::Body, params: &[("id", "integer", "id interno do anuncio (produto_marketplace.id)", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_status", description: "Consulta o resultado resumido e a proxima data de verificacao de 1 a 200 familias, sem iniciar nova verificacao. Exemplo ids='155'. Nao inclui os achados; use flexi_familia_verificacao_detalhe para investigar erro ou alerta.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/status", params_in: ParamsIn::Query, params: &[("ids", "string", "IDs de familia separados por virgula, ex.: 155", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_detalhe", description: "Consulta o ultimo diagnostico persistido da familia, incluindo achados, erro e data. Somente leitura; nao inicia nova verificacao. Se nao houver registro, informe que o motivo ainda nao esta disponivel.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/{id}/verificacao", params_in: ParamsIn::Query, params: &[("id", "integer", "id da familia marketplace", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_vendas", description: "Vendas por anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/vendas", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", false), ("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
@@ -232,11 +236,23 @@ mod tests {
 
     #[test]
     fn queue_and_exact_gestao_search_use_the_screen_contracts() {
+        let interrupted = find_tool("flexi_fila_vendas_interrompidas_ml").unwrap();
+        assert!(build_request(interrupted, &json!({})).is_err());
+        let (path, query, body) = build_request(interrupted, &json!({ "marketplace": 0, "janela_dias": 60 })).unwrap();
+        assert_eq!(path, "/api/marketplaces/anuncios/vendas-interrompidas");
+        assert_eq!(query.unwrap(), json!({ "marketplace": 0, "janela_dias": 60 }));
+        assert!(body.is_none());
+
         let queue = find_tool("flexi_fila_inativos_com_vendas").unwrap();
         assert_eq!(queue.risk, ToolRisk::Read);
         let (path, query, body) = build_request(queue, &json!({})).unwrap();
         assert_eq!(path, "/api/marketplaces/anuncios/inativos-com-vendas");
         assert_eq!(query.unwrap(), json!({}));
+        assert!(body.is_none());
+        let products = find_tool("flexi_fila_produtos_sem_anuncios_ml").unwrap();
+        let (path, query, body) = build_request(products, &json!({ "page": 1 })).unwrap();
+        assert_eq!(path, "/api/marketplaces/produtos-sem-anuncios");
+        assert_eq!(query.unwrap(), json!({ "page": 1 }));
         assert!(body.is_none());
         let action = find_tool("flexi_registrar_acao_inativo").unwrap();
         assert_eq!(action.risk, ToolRisk::Write);
@@ -281,6 +297,20 @@ mod tests {
         assert_eq!(path, "/api/precificacao/mercadolivre/recuperacao-anuncios");
         assert_eq!(query.unwrap(), json!({ "prioridade": "high", "pagina": 1, "limite": 25 }));
         assert!(body.is_none());
+
+        let remote = find_tool("flexi_status_remoto_anuncio_ml").unwrap();
+        assert_eq!(remote.risk, ToolRisk::Read);
+        let (path, query, body) = build_request(remote, &json!({ "id": 123 })).unwrap();
+        assert_eq!(path, "/api/precificacao/mercadolivre/anuncios/123/status-remoto");
+        assert_eq!(query.unwrap(), json!({}));
+        assert!(body.is_none());
+
+        let sync = find_tool("flexi_sincronizar_status_anuncio_ml").unwrap();
+        assert_eq!(sync.risk, ToolRisk::Write);
+        let (path, query, body) = build_request(sync, &json!({ "id": 123 })).unwrap();
+        assert_eq!(path, "/api/precificacao/mercadolivre/anuncios/123/sincronizar-status");
+        assert!(query.is_none());
+        assert_eq!(body.unwrap(), json!({}));
 
         for (name, suffix, risk) in [
             ("flexi_verificar_recuperacao_ml", "concluir", ToolRisk::Write),
