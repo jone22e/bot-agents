@@ -397,10 +397,11 @@ impl RuntimeService {
     }
 
     /// Definicoes MCP das ferramentas Flexi para um DOT (vazio se nao houver conexao).
-    pub async fn flexi_tools_for_dot(&self, dot_id: &str) -> Vec<Value> {
+    pub async fn flexi_tools_for_dot(&self, dot_id: &str) -> DotsResult<Vec<Value>> {
         match self.flexi_connection_for_dot(dot_id).await {
-            Ok(Some(_)) => dots_flexi::tool_definitions(),
-            _ => vec![],
+            Ok(Some(_)) => Ok(dots_flexi::tool_definitions()),
+            Ok(None) => Ok(vec![]),
+            Err(error) => Err(error),
         }
     }
 }

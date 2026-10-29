@@ -1060,10 +1060,10 @@ impl RuntimeService {
             "gateway.tools" => {
                 let TokenParams { token } = p(params)?;
                 let ctx = self.registry.context_by_token(&token).ok_or_else(|| DotsError::Unauthorized("token de execucao invalido".into()))?;
-                ctx.gateway_seen.store(true, Ordering::SeqCst);
                 let mut tools = crate::tools::tool_definitions();
-                tools.extend(self.flexi_tools_for_dot(&ctx.dot_id).await);
+                tools.extend(self.flexi_tools_for_dot(&ctx.dot_id).await?);
                 crate::tools::add_approval_assessment_schema(&mut tools);
+                ctx.gateway_seen.store(true, Ordering::SeqCst);
                 Ok(json!({ "tools": tools }))
             }
             "audit.list" => {

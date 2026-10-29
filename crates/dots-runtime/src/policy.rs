@@ -28,8 +28,8 @@ pub struct ExecutionContext {
     pub events: mpsc::Sender<ExecutionEvent>,
     /// Hosts dos apps conectados a este DOT (ex.: o Flexi): o navegador abre neles sem exigir rede liberada.
     pub app_hosts: Vec<String>,
-    /// Ligado quando o gateway MCP desta execucao fala com o runtime (lista ou chama ferramentas).
-    /// Desligado ao fim = o motor rodou o turno sem as ferramentas dots_*/flexi_*.
+    /// Ligado quando o runtime monta o catalogo ou recebe uma chamada do gateway nesta execucao.
+    /// Isso nao confirma que o motor disponibilizou o catalogo ao modelo.
     pub gateway_seen: Arc<std::sync::atomic::AtomicBool>,
 }
 

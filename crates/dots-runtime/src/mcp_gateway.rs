@@ -9,8 +9,6 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-use crate::tools::{add_approval_assessment_schema, tool_definitions};
-
 fn resolve_token() -> Option<String> {
     if let Ok(t) = std::env::var("DOTS_EXECUTION_TOKEN") {
         if !t.trim().is_empty() {
@@ -75,17 +73,19 @@ impl Gateway {
             "notifications/initialized" | "notifications/cancelled" | "notifications/roots/list_changed" => {}
             "ping" => self.reply(id, json!({})).await,
             "tools/list" => {
-                // Lista por execucao (inclui ferramentas de aplicativos conectados ao DOT); cai na lista fixa sem token/runtime.
-                let dynamic = match (&self.token, self.client().await) {
-                    (Some(token), Ok(c)) => c.call("gateway.tools", json!({ "token": token })).await.ok(),
-                    _ => None,
+                // Sem runtime ou token, nao anuncie uma lista parcial que parece valida mas omite o Flexi.
+                let result = match &self.token {
+                    None => Err("gateway sem token de execucao".to_string()),
+                    Some(token) => match self.client().await {
+                        Ok(client) => client.call("gateway.tools", json!({ "token": token })).await.map_err(|e| e.message().to_string()),
+                        Err(error) => Err(error),
+                    },
                 };
-                match dynamic {
-                    Some(v) => self.reply(id, v).await,
-                    None => {
-                        let mut tools = tool_definitions();
-                        add_approval_assessment_schema(&mut tools);
-                        self.reply(id, json!({ "tools": tools })).await;
+                match result {
+                    Ok(tools) => self.reply(id, tools).await,
+                    Err(error) => {
+                        eprintln!("dotsd mcp-gateway: falha ao carregar ferramentas: {error}");
+                        self.reply_err(id, -32603, format!("falha ao carregar ferramentas DOTS: {error}")).await;
                     }
                 }
             }
