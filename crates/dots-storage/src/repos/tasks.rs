@@ -268,6 +268,17 @@ impl<'a> TasksRepo<'a> {
         self.get(id)
     }
 
+    /// Uma resposta tardia so retoma a tarefa se a execucao correspondente ainda estiver ativa.
+    pub fn resume_after_approval(&mut self, id: &str, execution_id: &str) -> DotsResult<bool> {
+        let changed = self.conn.execute(
+            "UPDATE tasks SET status = 'RUNNING', updated_at = ?3
+             WHERE id = ?1 AND status IN ('WAITING_APPROVAL', 'RUNNING')
+               AND EXISTS (SELECT 1 FROM executions WHERE id = ?2 AND task_id = ?1 AND status = 'RUNNING')",
+            params![id, execution_id, ts(&dots_core::now())],
+        ).map_err(storage_err)?;
+        Ok(changed != 0)
+    }
+
     pub fn set_result(&mut self, id: &str, text: &str) -> DotsResult<()> {
         self.conn
             .execute(
@@ -313,6 +324,20 @@ impl<'a> TasksRepo<'a> {
         let stuck = self.list(&TaskFilter { status: Some(vec![TaskStatus::Running, TaskStatus::WaitingApproval]), limit: 1000, ..Default::default() })?;
         let mut out = vec![];
         for t in stuck {
+            // Versoes antigas podiam marcar como RUNNING uma tarefa ja concluida quando uma aprovacao chegava
+            // tarde. Preserve o resultado entregue, sem reenfileirar uma operacao que ja terminou.
+            let restored = self.conn.execute(
+                "UPDATE tasks SET status = 'COMPLETED', updated_at = ?2
+                 WHERE id = ?1 AND status = 'RUNNING' AND finished_at IS NOT NULL AND result_json IS NOT NULL
+                   AND (SELECT status FROM executions WHERE task_id = ?1 ORDER BY attempt DESC, started_at DESC, rowid DESC LIMIT 1) = 'COMPLETED'
+                   AND NOT EXISTS (SELECT 1 FROM executions WHERE task_id = ?1 AND status = 'RUNNING')
+                   AND NOT EXISTS (SELECT 1 FROM delegations WHERE child_task_id = ?1 AND status != 'completed')",
+                params![t.id, ts(&dots_core::now())],
+            ).map_err(storage_err)?;
+            if restored == 1 {
+                out.push((self.get(&t.id)?, TaskStatus::Completed));
+                continue;
+            }
             // Um reinicio do runtime nao mata o trabalho: a tarefa volta a fila (os pontos de controle evitam repetir
             // acoes). So fica aguardando o usuario quando os reinicios excedem as tentativas previstas.
             let can_retry = t.attempts <= t.max_attempts;

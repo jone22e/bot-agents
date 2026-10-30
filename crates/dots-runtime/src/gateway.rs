@@ -64,7 +64,7 @@ impl RuntimeService {
             let host = crate::policy::url_host(url);
             if (url.starts_with("http://") || url.starts_with("https://"))
                 && !host.is_empty()
-                && !ctx.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+                && !crate::policy::is_connected_browser_host(&host, &ctx.app_hosts) {
                 Some(host)
             } else {
                 None
@@ -249,6 +249,11 @@ impl RuntimeService {
                 false
             }
         };
+        let (tid, eid) = (ctx.task_id.clone(), ctx.execution_id.clone());
+        let active = self.storage.call(move |st| st.tasks().resume_after_approval(&tid, &eid)).await?;
+        if !active {
+            return Ok((false, Some("a execucao ja terminou; a acao nao sera executada".into())));
+        }
         let reason = if approved {
             self.learn(ctx, tool, input, &approval.id).await;
             None
@@ -256,8 +261,6 @@ impl RuntimeService {
             let id = approval.id.clone();
             self.storage.call(move |st| st.approvals().get(&id)).await.ok().and_then(|a| a.reason).filter(|r| !r.trim().is_empty())
         };
-        let tid = ctx.task_id.clone();
-        let _ = self.storage.call(move |st| st.tasks().set_status(&tid, TaskStatus::Running, None)).await;
         self.events.emit("task.changed", json!({ "id": ctx.task_id, "dot_id": ctx.dot_id, "status": "RUNNING" }));
         let _ = ctx.events.send(ExecutionEvent::PermissionResolved { approval_id: approval.id.clone(), approved }).await;
         Ok((approved, reason))

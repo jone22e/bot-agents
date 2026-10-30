@@ -294,6 +294,30 @@ mod phase2 {
     }
 
     #[test]
+    fn late_approval_does_not_reopen_a_finished_task() {
+        let (mut s, dot_id) = with_dot();
+        let t = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "trabalhar".into(), ..Default::default() }, Some(EngineKind::Claude)).unwrap();
+        s.tasks().set_status(&t.id, TaskStatus::Running, None).unwrap();
+        let e = s.executions().create(&t.id, &dot_id, EngineKind::Claude, 1, None).unwrap();
+        s.tasks().set_status(&t.id, TaskStatus::WaitingApproval, None).unwrap();
+        assert!(s.tasks().resume_after_approval(&t.id, &e.id).unwrap());
+        assert_eq!(s.tasks().get(&t.id).unwrap().attempts, 1, "resposta nao inicia uma nova tentativa");
+        s.executions().finish(&e.id, ExecutionStatus::Completed, None, None, None, &serde_json::json!({})).unwrap();
+        s.tasks().set_status(&t.id, TaskStatus::Completed, None).unwrap();
+        assert!(!s.tasks().resume_after_approval(&t.id, &e.id).unwrap());
+        assert_eq!(s.tasks().get(&t.id).unwrap().status, TaskStatus::Completed);
+
+        // Mesmo que uma nova tentativa esteja aguardando aprovacao, a resposta da execucao antiga nao a retoma.
+        s.tasks().set_status(&t.id, TaskStatus::Running, None).unwrap();
+        let next = s.executions().create(&t.id, &dot_id, EngineKind::Claude, 2, None).unwrap();
+        s.tasks().set_status(&t.id, TaskStatus::WaitingApproval, None).unwrap();
+        assert!(!s.tasks().resume_after_approval(&t.id, &e.id).unwrap());
+        assert_eq!(s.tasks().get(&t.id).unwrap().status, TaskStatus::WaitingApproval);
+        assert!(s.tasks().resume_after_approval(&t.id, &next.id).unwrap());
+        assert_eq!(s.tasks().get(&t.id).unwrap().attempts, 2);
+    }
+
+    #[test]
     fn claim_queued_blocks_parallel_resumes_of_one_conversation() {
         let (mut s, dot_id) = with_dot();
         let conversation = s.conversations().create(&dot_id, "Teste").unwrap();
@@ -388,6 +412,45 @@ mod phase2 {
         assert_eq!(activity[0].finished_at.to_rfc3339(), "2026-10-19T00:20:00+00:00");
         assert_eq!(activity[1].started_at.to_rfc3339(), "2026-10-19T00:40:00+00:00");
         assert_eq!(activity[1].finished_at.to_rfc3339(), "2026-10-19T01:10:00+00:00");
+    }
+
+    #[test]
+    fn recovery_preserves_a_completed_task_reopened_by_a_late_approval() {
+        let (mut s, dot_id) = with_dot();
+        let parent = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "coordene".into(), ..Default::default() }, None).unwrap();
+        let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "trabalho concluido".into(), ..Default::default() }, None).unwrap();
+        let delegation = s.delegations().create(&dot_id, &dot_id, &parent.id, &task.id, "corr", "trabalho concluido").unwrap();
+        s.delegations().set_status(&delegation.id, DelegationStatus::Completed, Some("resultado entregue")).unwrap();
+        s.tasks().set_status(&task.id, TaskStatus::Running, None).unwrap();
+        let execution = s.executions().create(&task.id, &dot_id, EngineKind::Codex, 1, None).unwrap();
+        s.executions().finish(&execution.id, ExecutionStatus::Completed, None, None, None, &serde_json::json!({})).unwrap();
+        s.tasks().set_result(&task.id, "resultado entregue").unwrap();
+        let finished = s.tasks().set_status(&task.id, TaskStatus::Completed, None).unwrap().finished_at;
+        // Estado legado produzido pela resposta tardia a uma aprovacao.
+        s.tasks().set_status(&task.id, TaskStatus::Running, None).unwrap();
+
+        let recovered = s.tasks().recover_interrupted().unwrap();
+        assert_eq!(recovered[0].1, TaskStatus::Completed);
+        let restored = s.tasks().get(&task.id).unwrap();
+        assert_eq!(restored.result_text.as_deref(), Some("resultado entregue"));
+        assert_eq!(restored.finished_at, finished);
+    }
+
+    #[test]
+    fn recovery_does_not_restore_an_old_result_over_a_new_interrupted_attempt() {
+        let (mut s, dot_id) = with_dot();
+        let task = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "nova tentativa".into(), ..Default::default() }, None).unwrap();
+        s.tasks().set_status(&task.id, TaskStatus::Running, None).unwrap();
+        let first = s.executions().create(&task.id, &dot_id, EngineKind::Codex, 1, None).unwrap();
+        s.executions().finish(&first.id, ExecutionStatus::Completed, None, None, None, &serde_json::json!({})).unwrap();
+        s.tasks().set_result(&task.id, "resultado antigo").unwrap();
+        s.tasks().set_status(&task.id, TaskStatus::Completed, None).unwrap();
+        s.tasks().set_status(&task.id, TaskStatus::Running, None).unwrap();
+        s.executions().create(&task.id, &dot_id, EngineKind::Codex, 2, None).unwrap();
+        s.executions().mark_interrupted().unwrap();
+
+        let recovered = s.tasks().recover_interrupted().unwrap();
+        assert_ne!(recovered[0].1, TaskStatus::Completed);
     }
 
     #[test]
