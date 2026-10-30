@@ -135,6 +135,22 @@ async fn write_file_through_gateway_and_block_outside_workspace() {
 }
 
 #[tokio::test]
+async fn records_when_gateway_sends_catalog_to_engine() {
+    let mut rt = start().await;
+    rt.use_fake_engine().await;
+    let dot = rt.create_dot("Catalogo", "read").await;
+    let conv = rt.call("conversations.create", json!({ "dot_id": dot.id, "title": "Teste" })).await;
+    let sent = rt.call("conversations.send", json!({ "conversation_id": conv["id"], "content": "TOOLS" })).await;
+    let id = sent["task"]["id"].as_str().unwrap();
+    let done = rt.wait_task(id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    assert_eq!(done.status, TaskStatus::Completed, "erro: {:?}", done.error);
+    let msgs: Vec<Message> = serde_json::from_value(rt.call("conversations.messages", json!({ "id": conv["id"], "limit": 20 })).await).unwrap();
+    let reply = msgs.iter().find(|m| m.role == MessageRole::Dot).unwrap();
+    assert_eq!(reply.metadata["gateway_catalog_sent"], true, "catalogo escrito no canal do motor");
+    rt.stop();
+}
+
+#[tokio::test]
 async fn approval_flow_approve_and_reject() {
     let mut rt = start().await;
     rt.use_fake_engine().await;

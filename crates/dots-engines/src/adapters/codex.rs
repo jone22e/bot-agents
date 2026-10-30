@@ -72,6 +72,10 @@ impl AgentEngine for CodexAdapter {
             args.push(format!("mcp_servers.{n}.env={{{}}}", env_items.join(",")));
             args.push("-c".into());
             args.push(format!("mcp_servers.{n}.default_tools_approval_mode=\"approve\""));
+            // Sem o gateway o Codex pode iniciar normalmente e concluir o turno sem as ferramentas DOTS.
+            // Exija sua inicializacao, para que uma falha apareca como erro em vez de uma tarefa concluida.
+            args.push("-c".into());
+            args.push(format!("mcp_servers.{n}.required=true"));
             // O Codex descarta em silencio um servidor MCP que nao inicializa no prazo (padrao 10 s) e o modelo
             // fica sem nenhuma ferramenta dots_*/flexi_* naquele turno. Prazo maior para maquinas carregadas;
             // o limite por chamada acompanha o maior tempo de comando/navegador do runtime.
@@ -257,6 +261,7 @@ mod tests {
         assert!(a.contains("mcp_servers.dots.command=\"/opt/dotsd\""));
         assert!(a.contains("mcp_servers.dots.args=[\"mcp-gateway\"]"));
         assert!(a.contains("mcp_servers.dots.env={DOTS_EXECUTION_TOKEN=\"tok\"}"));
+        assert!(a.contains("mcp_servers.dots.required=true"), "gateway DOTS deve ser obrigatorio: {a}");
         assert!(a.contains("default_tools_approval_mode=\"approve\""));
         assert!(a.contains("mcp_servers.dots.startup_timeout_sec=60") && a.contains("mcp_servers.dots.tool_timeout_sec=900"), "prazos do gateway: {a}");
         assert!(a.contains("mcp_servers.cua_repl.command=\"/usr/bin/true\" -c mcp_servers.cua_repl.enabled=false") && a.contains("mcp_servers.node_repl.enabled=false"), "computer use do Codex desligado: {a}");

@@ -48,6 +48,19 @@ fn random_token() -> String {
     hex::encode(b)
 }
 
+/// A autorizacao da loja vale apenas para a base Brasiltec, nao para outras contas Flexi.
+fn connected_browser_hosts(base_url: &str, base: Option<&str>) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let flexi_host = crate::policy::url_host(base_url);
+    if !flexi_host.is_empty() {
+        hosts.push(flexi_host);
+    }
+    if base == Some("c2s_brasiltec") && !hosts.iter().any(|h| h == crate::policy::BRASILTEC_STORE_HOST) {
+        hosts.push(crate::policy::BRASILTEC_STORE_HOST.into());
+    }
+    hosts
+}
+
 impl RuntimeService {
     /// Ponto de entrada do scheduler. Nunca retorna erro para o chamador: toda falha vira estado da tarefa.
     pub async fn run_task(self: Arc<Self>, task: Task) {
@@ -132,7 +145,7 @@ impl RuntimeService {
         // DOT ligado ao Flexi recebe o mapa do Flexi (marketplaces, Google Shopping x Google Ads) e o navegador abre no Flexi logado.
         let flexi_conn = self.flexi_connection_for_dot(&dot_id).await.ok().flatten();
         let flexi_context = flexi_conn.as_ref().map(|_| crate::flexi::FLEXI_CONTEXT);
-        let app_hosts: Vec<String> = flexi_conn.iter().map(|c| crate::policy::url_host(&c.base_url)).filter(|h| !h.is_empty()).collect();
+        let app_hosts = flexi_conn.as_ref().map(|c| connected_browser_hosts(&c.base_url, c.base.as_deref())).unwrap_or_default();
         let mut effective_dot = dot.clone();
         let integration = self.storage.call({ let d = dot_id.clone(); move |s| s.apps().integration(&d, crate::flexi::KIND) }).await?;
         if let Some(integration) = integration.filter(|value| value.role_template.is_some()) {
@@ -172,7 +185,7 @@ impl RuntimeService {
         let tmp_ctx = ExecutionContext {
             token: String::new(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
             workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: mpsc::channel(1).0, app_hosts: app_hosts.clone(),
-            gateway_seen: Default::default(),
+            gateway_seen: Default::default(), gateway_catalog_sent: Default::default(),
         };
         for a in &attachments {
             match tmp_ctx.authorize_path(a, false).and_then(|p| std::fs::read(&p).map_err(|e| DotsError::Io(e.to_string())).map(|c| (p, c))) {
@@ -205,7 +218,7 @@ impl RuntimeService {
         let ctx = Arc::new(ExecutionContext {
             token: token.clone(), execution_id: execution.id.clone(), task_id: task.id.clone(), dot_id: dot_id.clone(), dot_name: dot.name.clone(),
             workspace: workspace.clone(), dirs: dirs.clone(), policy: policy.clone(), events: ev_tx, app_hosts: app_hosts.clone(),
-            gateway_seen: Default::default(),
+            gateway_seen: Default::default(), gateway_catalog_sent: Default::default(),
         });
         let req = ExecutionRequest {
             execution_id: execution.id.clone(),
@@ -380,7 +393,8 @@ impl RuntimeService {
         let will_retry = (retryable && task.retry_safe && t.attempts < task.max_attempts) || safe_conflict_retry;
         if let Some(mid) = &dot_message_id {
             let content = if safe_conflict_retry { "Sessao do Codex ocupada; retomando em uma sessao nova.".to_string() } else if result_text.is_empty() { error.clone().unwrap_or_default() } else { result_text.clone() };
-            let (m, c, meta) = (mid.clone(), content, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": if safe_conflict_retry { None } else { error.as_deref() }, "gateway_absent": gateway_absent }));
+            let catalog_sent = ctx.gateway_catalog_sent.load(std::sync::atomic::Ordering::SeqCst);
+            let (m, c, meta) = (mid.clone(), content, json!({ "streaming": false, "status": status.as_str(), "tools": tool_names, "error": if safe_conflict_retry { None } else { error.as_deref() }, "gateway_absent": gateway_absent, "gateway_catalog_sent": catalog_sent }));
             let _ = self.storage.call(move |st| st.conversations().update_message_content(&m, &c, Some(meta))).await;
             self.events.emit("message.changed", json!({ "conversation_id": task.conversation_id, "message_id": mid }));
         }
@@ -480,6 +494,7 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
     s.push_str("- Em trabalhos longos, grave pontos de controle com dots_checkpoint apos cada etapa concluida.\n");
     if dot.role == DotRole::Supervisor {
         s.push_str("\nVoce e um SUPERVISOR (gerente): divide objetivos em pedidos claros, delega a DOTs da equipe (dots_list_team, dots_delegate), acompanha (dots_delegation_status), identifica bloqueios e consolida as entregas. Voce NUNCA executa o trabalho da equipe, mesmo sem nenhum funcionario: so consulta, delega, acompanha e responde; acoes que alteram algo sao negadas para voce. Se nao houver funcionario para a tarefa (ou todos estiverem ocupados com outra coisa), contrate um com dots_hire_employee: voce cria o nome (unico, de pessoa) e define a funcao e as instrucoes; depois delegue a ele. Delegacoes sao assincronas: apos delegar, termine o turno dizendo o que aguarda; cada entrega gera uma tarefa de acompanhamento para voce e, ao fim, outra de consolidacao. Ao receber cada acompanhamento, avalie o resultado e o estado da equipe por iniciativa propria, corrija bloqueios e oriente quem ainda trabalha, sem esperar o usuario cobrar. Perguntas e pedidos de permissao dos seus funcionarios sobre pedidos delegados chegam a voce como tarefas: responda com dots_answer_question e decida com dots_decide_approval (aprove o que esta dentro do pedido e do que o usuario autorizou; acoes irreversiveis que o usuario nao autorizou, confirme antes com ele). Use dots_ask_user so quando uma decisao for do usuario. Se um funcionario esta PARADO (interrompido ou com falha), retome com dots_resume_delegation ou delegue de novo com instrucoes melhores, em vez de so relatar que ele nao esta trabalhando. Voce nao pode alterar permissoes de ninguem. Voce pode pausar um funcionario da equipe (dots_pause_employee: ele para de receber trabalho ate ser retomado) e retoma-lo (dots_resume_employee), sem aprovacao do usuario. Se um funcionario errar de forma grave ou repetir o mesmo erro depois de instrucoes melhores, voce pode demiti-lo com dots_dismiss_employee (informe o motivo e a licao); isso passa pela aprovacao do usuario, EXCLUI o funcionario e registra a licao para toda a equipe; em seguida contrate um substituto com dots_hire_employee e delegue a ele de novo.\n");
+        s.push_str("- Ao iniciar uma rodada e ao acompanhar uma entrega, consulte todas as metas vigentes e o estado da equipe. Para cada frente com meta pendente, verifique se ja ha trabalho em andamento; quando houver funcionario adequado e disponivel e um proximo passo concreto autorizado, delegue ou retome o trabalho dessa frente. Acompanhe as frentes em paralelo sem duplicar tarefas nem repetir acoes concluidas. Um bloqueio em uma frente nao interrompe as demais; se nao puder avancar em alguma, registre o motivo real e o que falta. Lance na meta somente resultados confirmados.\n");
         if let Some((members, limit)) = hiring {
             s.push_str(&format!("- Sua equipe tem {members} funcionario(s); o limite definido pelo usuario e {limit} por gerente.\n"));
         }
@@ -540,6 +555,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn store_host_is_limited_to_the_brasiltec_connection() {
+        let brasiltec = connected_browser_hosts("https://flexi.c2s-business.com", Some("c2s_brasiltec"));
+        assert_eq!(brasiltec, vec!["flexi.c2s-business.com", "brasiltec.ind.br"]);
+        assert_eq!(connected_browser_hosts("https://flexi.c2s-business.com", Some("c2s_other")), vec!["flexi.c2s-business.com"]);
+        assert_eq!(connected_browser_hosts("https://flexi.c2s-business.com", None), vec!["flexi.c2s-business.com"]);
+    }
+
+    #[test]
     fn retries_only_preflight_codex_writer_conflict() {
         let error = "failed to initialize thread persistence: thread-store conflict: thread 01a178a3-88fd-70e3-8cbe-5b04015c3e already has an active writer";
         assert!(retry_preflight_thread_conflict(EngineKind::Codex, true, false, false, Some(error), 1, 1));
@@ -565,6 +588,8 @@ mod tests {
         let gerente = dots_core::Dot { role: DotRole::Supervisor, ..dot.clone() };
         let nested = build_instructions(&gerente, &policy, &[], None, &[], &[], Some((0, 3)), Some("Milei"));
         assert!(nested.contains("registre na hora com dots_goal_create"), "gerente de subequipe registra as metas da propria equipe");
+        assert!(nested.contains("consulte todas as metas vigentes e o estado da equipe") && nested.contains("Um bloqueio em uma frente nao interrompe as demais"), "supervisor acompanha todas as frentes e delega trabalho disponivel");
+        assert!(!e.contains("consulte todas as metas vigentes e o estado da equipe"), "o principio de coordenacao nao e imposto ao funcionario");
         assert!(s.contains("NAO repita estes erros") && s.contains("revisar o preco antes de publicar") && s.contains("Milei"), "licoes de demissao entram nas instrucoes");
         assert!(s.contains("Mapa do app: teste"));
         assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");

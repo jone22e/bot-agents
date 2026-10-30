@@ -1066,6 +1066,12 @@ impl RuntimeService {
                 ctx.gateway_seen.store(true, Ordering::SeqCst);
                 Ok(json!({ "tools": tools }))
             }
+            "gateway.catalog_sent" => {
+                let TokenParams { token } = p(params)?;
+                let ctx = self.registry.context_by_token(&token).ok_or_else(|| DotsError::Unauthorized("token de execucao invalido".into()))?;
+                ctx.gateway_catalog_sent.store(true, Ordering::SeqCst);
+                Ok(json!({ "ok": true }))
+            }
             "audit.list" => {
                 let LimitParams { limit } = p(params).unwrap_or_default();
                 Ok(json!(self.storage.call(move |s| s.audit().list_recent(limit.min(1000))).await?))

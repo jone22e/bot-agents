@@ -31,9 +31,20 @@ pub struct ExecutionContext {
     /// Ligado quando o runtime monta o catalogo ou recebe uma chamada do gateway nesta execucao.
     /// Isso nao confirma que o motor disponibilizou o catalogo ao modelo.
     pub gateway_seen: Arc<std::sync::atomic::AtomicBool>,
+    /// O gateway confirmou que escreveu o catalogo no canal do CLI; nao prova que o modelo o recebeu.
+    pub gateway_catalog_sent: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub type SharedContext = Arc<ExecutionContext>;
+
+/// A loja autorizada para a base Brasiltec. A autorizacao nao inclui outros subdominios.
+pub(crate) const BRASILTEC_STORE_HOST: &str = "brasiltec.ind.br";
+
+pub(crate) fn is_connected_browser_host(host: &str, app_hosts: &[String]) -> bool {
+    !host.is_empty() && app_hosts.iter().any(|h| {
+        host == h || (h != BRASILTEC_STORE_HOST && host.ends_with(&format!(".{h}")))
+    })
+}
 
 /// Host de uma URL (sem esquema, credenciais, porta ou caminho), em minusculas. Vazio se nao houver.
 pub fn url_host(url: &str) -> String {
@@ -345,7 +356,7 @@ impl ExecutionContext {
                 }
                 let host = url_host(&url);
                 // App conectado (ex.: Flexi): e o trabalho normal do DOT, so leitura de tela, sem exigir rede liberada.
-                if !host.is_empty() && self.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+                if is_connected_browser_host(&host, &self.app_hosts) {
                     return Ok((RiskLevel::Read, vec![url.clone()], format!("abrir no app conectado: {}", url.chars().take(100).collect::<String>())));
                 }
                 if !browser_network_allowed {
@@ -360,7 +371,7 @@ impl ExecutionContext {
                 if url.is_empty() || url == "about:blank" {
                     return Err(DotsError::Validation("o navegador do DOT nao tem pagina aberta: use dots_browser_open antes".into()));
                 }
-                let on_app = !host.is_empty() && self.app_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{h}")));
+                let on_app = is_connected_browser_host(&host, &self.app_hosts);
                 if !on_app && !browser_network_allowed {
                     return Err(DotsError::Unauthorized(format!("a pagina atual ({host}) nao e de um app conectado e o acesso a rede esta desabilitado para este DOT")));
                 }
@@ -469,7 +480,7 @@ mod tests {
             token: "t".into(), execution_id: "e".into(), task_id: "k".into(), dot_id: "d".into(), dot_name: "D".into(),
             workspace: dir.join("ws"),
             dirs: vec![AuthorizedDir { path: dir.join("ws"), can_read: true, can_write: true }, AuthorizedDir { path: dir.join("ro"), can_read: true, can_write: false }],
-            policy, events: tx, app_hosts: vec!["flexi.exemplo.com".into()], gateway_seen: Default::default(),
+            policy, events: tx, app_hosts: vec!["flexi.exemplo.com".into()], gateway_seen: Default::default(), gateway_catalog_sent: Default::default(),
         }
     }
 
@@ -552,6 +563,18 @@ mod tests {
         let mut c4 = ctx(dir.path(), AutoApproveLevel::Write);
         c4.policy.allow_network = true;
         assert!(matches!(c4.evaluate("dots_browser_open", &serde_json::json!({"url": "https://x"})), Decision::NeedsApproval { risk: RiskLevel::Exec, .. }));
+    }
+
+    #[test]
+    fn brasiltec_store_access_is_readable_without_authorizing_other_hosts_or_critical_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = ctx(dir.path(), AutoApproveLevel::Read);
+        c.app_hosts.push(BRASILTEC_STORE_HOST.into());
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://brasiltec.ind.br/produto"})), Decision::Allow { risk: RiskLevel::Read, .. }));
+        assert!(matches!(c.evaluate("dots_browser_read", &serde_json::json!({"_page_url":"https://brasiltec.ind.br/produto"})), Decision::Allow { risk: RiskLevel::Read, .. }));
+        assert!(matches!(c.evaluate("dots_browser_click", &serde_json::json!({"_page_url":"https://brasiltec.ind.br/", "_element":"button \"Comprar agora\""})), Decision::NeedsApproval { risk: RiskLevel::Critical, .. }));
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://outro.brasiltec.ind.br/"})), Decision::Deny(_)));
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://brasiltec.ind.br.exemplo.com/"})), Decision::Deny(_)));
     }
 
     #[test]

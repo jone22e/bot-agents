@@ -35,18 +35,20 @@ struct Gateway {
 }
 
 impl Gateway {
-    async fn send(&self, v: Value) {
+    async fn send(&self, v: Value) -> bool {
         let mut out = self.stdout.lock().await;
-        let _ = out.write_all(format!("{v}\n").as_bytes()).await;
-        let _ = out.flush().await;
+        if out.write_all(format!("{v}\n").as_bytes()).await.is_err() {
+            return false;
+        }
+        out.flush().await.is_ok()
     }
 
     async fn reply(&self, id: Value, result: Value) {
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result })).await;
+        let _ = self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result })).await;
     }
 
     async fn reply_err(&self, id: Value, code: i64, message: String) {
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })).await;
+        let _ = self.send(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })).await;
     }
 
     async fn client(&self) -> Result<IpcClient, String> {
@@ -82,7 +84,13 @@ impl Gateway {
                     },
                 };
                 match result {
-                    Ok(tools) => self.reply(id, tools).await,
+                    Ok(tools) => {
+                        if self.send(json!({ "jsonrpc": "2.0", "id": id, "result": tools })).await {
+                            if let (Some(token), Ok(client)) = (&self.token, self.client().await) {
+                                let _ = client.call("gateway.catalog_sent", json!({ "token": token })).await;
+                            }
+                        }
+                    }
                     Err(error) => {
                         eprintln!("dotsd mcp-gateway: falha ao carregar ferramentas: {error}");
                         self.reply_err(id, -32603, format!("falha ao carregar ferramentas DOTS: {error}")).await;
