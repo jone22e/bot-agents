@@ -171,6 +171,28 @@ async fn runtime_restart_resumes_existing_idle_manager_without_user_message() {
 }
 
 #[tokio::test]
+async fn manager_schedule_runs_even_when_another_task_is_running() {
+    let rt = start().await;
+    let manager = rt.create_dot("Gerente metas", "read", "supervisor").await;
+    rt.call("dots.update", json!({ "id": manager.id, "patch": { "objective": "Acompanhar metas" } })).await;
+    rt.call("dots.start_autonomy", json!({ "id": manager.id })).await;
+    rt.wait_tasks(&manager.id, |ts| ts.iter().any(|t| t.origin.starts_with("autonomy:start:") && t.status == TaskStatus::Completed), Duration::from_secs(20)).await;
+    let schedules: Vec<Schedule> = serde_json::from_value(rt.call("schedules.list", json!({ "dot_id": manager.id })).await).unwrap();
+    let automatic = &schedules[0];
+    let busy: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": manager.id, "prompt": "SLEEP:10" })).await).unwrap();
+    rt.wait_task(&busy.id, &[TaskStatus::Running], Duration::from_secs(15)).await;
+    let db = dots_storage::Storage::open(dots_storage::StorageOptions::new(rt.dir.path().join("dots.db"))).unwrap();
+    let due = (dots_core::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    db.conn().execute("UPDATE schedules SET next_run_at = ?1 WHERE id = ?2", [due.as_str(), automatic.id.as_str()]).unwrap();
+    drop(db);
+    // Criar outra agenda acorda o loop depois de antecipar o horario no banco de teste.
+    rt.call("schedules.create", json!({ "dot_id": manager.id, "kind": "every", "spec": "60", "prompt": "Outra agenda" })).await;
+    let tasks = rt.wait_tasks(&manager.id, |ts| ts.iter().any(|t| t.origin == format!("schedule:{}", automatic.id)), Duration::from_secs(15)).await;
+    assert!(tasks.iter().any(|t| t.origin == format!("schedule:{}", automatic.id) && matches!(t.status, TaskStatus::Queued | TaskStatus::Running)));
+    rt.stop();
+}
+
+#[tokio::test]
 async fn file_trigger_creates_one_task_per_change_and_idle_runtime_spawns_nothing() {
     let rt = start().await;
     let dot = rt.create_dot("Revisor", "read", "worker").await;
@@ -206,6 +228,28 @@ async fn file_trigger_creates_one_task_per_change_and_idle_runtime_spawns_nothin
     let stats: RuntimeStats = serde_json::from_value(rt.call("stats.get", json!({})).await).unwrap();
     assert_eq!(stats.running, 0);
     assert!(stats.events_24h >= 3);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn delegation_includes_local_instructions_or_reports_when_missing() {
+    let rt = start().await;
+    let manager = rt.create_dot("Chefe roteiro", "read", "supervisor").await;
+    let worker = rt.create_dot("Operador roteiro", "read", "worker").await;
+    rt.call("policies.set", json!({ "dot_id": manager.id, "patch": { "can_delegate_to": [worker.id] } })).await;
+    let request = r#"FLEXI:dots_delegate:{"to":"Operador roteiro","request":"ECHO_PROMPT:Trabalhar","include_instructions":true}"#;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": manager.id, "prompt": request })).await).unwrap();
+    let done = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    assert!(done.result_text.unwrap_or_default().contains("nao ha instrucoes permanentes"));
+    assert!(rt.tasks(&worker.id).await.is_empty());
+
+    rt.call("dots.update", json!({ "id": manager.id, "patch": { "instructions": "Etapa 1: conferir.\nEtapa 2: executar." } })).await;
+    let t: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": manager.id, "prompt": request })).await).unwrap();
+    let done = rt.wait_task(&t.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
+    assert!(done.result_text.unwrap_or_default().starts_with("OK Delegacao"));
+    let tasks = rt.wait_tasks(&worker.id, |tasks| tasks.iter().any(|task| task.parent_task_id.as_deref() == Some(t.id.as_str())), Duration::from_secs(15)).await;
+    let child = tasks.iter().find(|task| task.parent_task_id.as_deref() == Some(t.id.as_str())).unwrap();
+    assert!(child.prompt.contains("Etapa 1: conferir.\nEtapa 2: executar."));
     rt.stop();
 }
 
@@ -412,20 +456,61 @@ async fn supervisor_sees_stopped_worker_and_resumes_delegation() {
     rt.wait_task(&child.id, &[TaskStatus::Cancelled], Duration::from_secs(15)).await;
     rt.wait_task(&t.id, &[TaskStatus::Completed], Duration::from_secs(30)).await;
     rt.wait_delegation(&t.id, &did, DelegationStatus::Cancelled, Duration::from_secs(15)).await;
+    // A primeira consolidacao ja existe quando o gerente decide retomar a delegacao.
+    rt.wait_tasks(&sup.id, |ts| ts.iter().any(|x| x.origin == format!("followup:{}", t.id) && x.status == TaskStatus::Completed), Duration::from_secs(20)).await;
     // o gerente retoma: a tarefa volta a fila, roda e a delegacao termina concluida
     let r: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
     let r = rt.wait_task(&r.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
     assert_eq!(r.result_text.as_deref(), Some("RETOMEI"), "{:?}", r.result_text);
+    let pending = rt.wait_delegation(&t.id, &did, DelegationStatus::Pending, Duration::from_secs(10)).await;
+    assert!(pending.result.is_none() && pending.resolved_at.is_none(), "a falha anterior nao deve parecer o resultado atual");
     let done = rt.wait_task(&child.id, &[TaskStatus::Completed], Duration::from_secs(40)).await;
     assert_eq!(done.result_text.as_deref(), Some("ACORDEI"));
     let delegation = rt.wait_delegation(&t.id, &did, DelegationStatus::Completed, Duration::from_secs(15)).await;
     assert_eq!(delegation.result.as_deref(), Some("ACORDEI"));
+    let updates = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|x| x.origin.starts_with(&format!("delegation_update:{did}:")) && x.prompt.contains("Resultado: ACORDEI")), Duration::from_secs(20)).await;
+    assert_eq!(updates.iter().filter(|x| x.origin.starts_with(&format!("delegation_update:{did}:")) && x.prompt.contains("Resultado: ACORDEI")).count(), 1);
     // so quem delegou pode retomar
     let other = rt.create_dot("Outro", "read", "supervisor").await;
     rt.call("policies.set", json!({ "dot_id": other.id, "patch": { "can_delegate_to": ["*"] } })).await;
     let x: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": other.id, "prompt": format!("RESUME:{did}") })).await).unwrap();
     let x = rt.wait_task(&x.id, &[TaskStatus::Completed, TaskStatus::Failed], Duration::from_secs(30)).await;
     assert!(x.result_text.as_deref().unwrap().starts_with("FALHOU:"), "{:?}", x.result_text);
+    rt.stop();
+}
+
+#[tokio::test]
+async fn delegated_browser_request_without_tools_is_marked_unverified() {
+    let rt = start().await;
+    let sup = rt.create_dot("Gerente verificacao", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let worker = rt.create_dot("Consulta", "read", "worker").await;
+    let parent: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Consulta:Consulte no navegador agora" })).await).unwrap();
+    let children = rt.wait_tasks(&worker.id, |ts| ts.iter().any(|t| t.origin.starts_with("delegation:") && t.status == TaskStatus::Completed), Duration::from_secs(20)).await;
+    let child = children.iter().find(|t| t.origin.starts_with("delegation:")).unwrap();
+    assert!(child.result_text.as_deref().unwrap().contains("consulta atual no navegador nao foi comprovada"));
+    let tasks = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin == format!("followup:{}", parent.id)), Duration::from_secs(20)).await;
+    assert!(tasks.iter().find(|t| t.origin == format!("followup:{}", parent.id)).unwrap().prompt.contains("consulta atual no navegador nao foi comprovada"));
+    let second: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Consulta:RECALL:consulta no navegador" })).await).unwrap();
+    let tasks = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin == format!("followup:{}", second.id)), Duration::from_secs(20)).await;
+    assert!(tasks.iter().find(|t| t.origin == format!("followup:{}", second.id)).unwrap().prompt.contains("consulta atual no navegador nao foi comprovada"));
+    rt.stop();
+}
+
+#[tokio::test]
+async fn manager_is_notified_when_delegated_task_cannot_start() {
+    let rt = start().await;
+    let sup = rt.create_dot("Gerente falha", "read", "supervisor").await;
+    rt.call("policies.set", json!({ "dot_id": sup.id, "patch": { "can_delegate_to": ["*"] } })).await;
+    let worker = rt.create_dot("Sem motor", "read", "worker").await;
+    rt.call("dots.update", json!({ "id": worker.id, "patch": { "primary_engine": null } })).await;
+    let parent: Task = serde_json::from_value(rt.call("tasks.create", json!({ "dot_id": sup.id, "prompt": "DELEGATE:Sem motor:Executar pedido" })).await).unwrap();
+    let children = rt.wait_tasks(&worker.id, |ts| ts.iter().any(|t| t.origin.starts_with("delegation:") && t.status == TaskStatus::WaitingUser), Duration::from_secs(20)).await;
+    let child = children.iter().find(|t| t.origin.starts_with("delegation:")).unwrap();
+    let did = child.origin.trim_start_matches("delegation:");
+    rt.wait_delegation(&parent.id, did, DelegationStatus::Failed, Duration::from_secs(20)).await;
+    let tasks = rt.wait_tasks(&sup.id, |ts| ts.iter().any(|t| t.origin == format!("followup:{}", parent.id) || t.origin.starts_with(&format!("delegation_update:{did}:"))), Duration::from_secs(20)).await;
+    assert!(tasks.iter().any(|t| t.prompt.contains("nao tem motor principal definido")));
     rt.stop();
 }
 

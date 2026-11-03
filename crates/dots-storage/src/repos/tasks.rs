@@ -107,6 +107,15 @@ impl<'a> TasksRepo<'a> {
         Ok(count > 0)
     }
 
+    /// Evita acumular rodadas da mesma agenda sem bloquear outras frentes do gerente.
+    pub fn has_active_for_origin(&self, dot_id: &str, origin: &str) -> DotsResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE dot_id = ?1 AND origin = ?2 AND status IN ('QUEUED', 'RUNNING', 'WAITING_APPROVAL')",
+            params![dot_id, origin], |r| r.get(0),
+        ).map_err(storage_err)?;
+        Ok(count > 0)
+    }
+
     pub fn list(&self, f: &TaskFilter) -> DotsResult<Vec<Task>> {
         let mut sql = format!("SELECT {COLS} FROM tasks WHERE 1=1");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![];
@@ -140,7 +149,7 @@ impl<'a> TasksRepo<'a> {
     pub fn queued(&self, limit: u32) -> DotsResult<Vec<Task>> {
         let mut stmt = self
             .conn
-            .prepare(&format!("SELECT {COLS} FROM tasks WHERE status = 'QUEUED' ORDER BY priority DESC, created_at LIMIT ?1"))
+            .prepare(&format!("SELECT {COLS} FROM tasks WHERE status = 'QUEUED' AND origin != 'delegation:pending' ORDER BY priority DESC, created_at LIMIT ?1"))
             .map_err(storage_err)?;
         let rows = stmt.query_map(params![limit], map).map_err(storage_err)?;
         rows.map(|r| r.map_err(storage_err).and_then(to_task)).collect()
@@ -184,7 +193,7 @@ impl<'a> TasksRepo<'a> {
         let changed = self.conn.execute(
             "UPDATE tasks SET status = 'RUNNING', updated_at = ?2,
                 started_at = COALESCE(started_at, ?2), attempts = attempts + 1
-             WHERE id = ?1 AND status = 'QUEUED' AND cancel_requested = 0
+             WHERE id = ?1 AND status = 'QUEUED' AND cancel_requested = 0 AND origin != 'delegation:pending'
                AND (conversation_id IS NULL OR NOT EXISTS (
                    SELECT 1 FROM tasks AS active
                    WHERE active.conversation_id = tasks.conversation_id

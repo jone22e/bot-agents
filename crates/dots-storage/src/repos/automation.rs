@@ -431,7 +431,7 @@ impl<'a> DelegationsRepo<'a> {
     /// Troca a tarefa filha pela continuacao (apos pergunta respondida) e reabre a delegacao.
     pub fn set_child(&mut self, id: &str, child_task_id: &str) -> DotsResult<Delegation> {
         self.conn
-            .execute("UPDATE delegations SET child_task_id = ?1, status = 'pending', resolved_at = NULL WHERE id = ?2", params![child_task_id, id])
+            .execute("UPDATE delegations SET child_task_id = ?1, status = 'pending', result = NULL, resolved_at = NULL WHERE id = ?2", params![child_task_id, id])
             .map_err(storage_err)?;
         self.get(id)
     }
@@ -439,7 +439,7 @@ impl<'a> DelegationsRepo<'a> {
     pub fn set_status(&mut self, id: &str, status: DelegationStatus, result: Option<&str>) -> DotsResult<Delegation> {
         let resolved = if status.is_terminal() { Some(ts(&dots_core::now())) } else { None };
         self.conn
-            .execute("UPDATE delegations SET status = ?1, result = COALESCE(?2, result), resolved_at = COALESCE(?3, resolved_at) WHERE id = ?4", params![status.as_str(), result, resolved, id])
+            .execute("UPDATE delegations SET status = ?1, result = CASE WHEN ?1 = 'pending' THEN NULL ELSE COALESCE(?2, result) END, resolved_at = CASE WHEN ?1 = 'pending' THEN NULL ELSE COALESCE(?3, resolved_at) END WHERE id = ?4", params![status.as_str(), result, resolved, id])
             .map_err(storage_err)?;
         self.get(id)
     }

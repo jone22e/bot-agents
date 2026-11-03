@@ -267,6 +267,33 @@ mod phase2 {
     }
 
     #[test]
+    fn manager_schedule_only_counts_its_own_active_round() {
+        let (mut s, dot_id) = with_dot();
+        let other = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Outra frente".into(), ..Default::default() }, None).unwrap();
+        s.tasks().set_status(&other.id, TaskStatus::WaitingUser, None).unwrap();
+        assert!(!s.tasks().has_active_for_origin(&dot_id, "schedule:manager").unwrap());
+        s.tasks().set_status(&other.id, TaskStatus::Running, None).unwrap();
+        assert!(!s.tasks().has_active_for_origin(&dot_id, "schedule:manager").unwrap());
+        let round = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Revisar metas".into(), origin: Some("schedule:manager".into()), ..Default::default() }, None).unwrap();
+        assert!(s.tasks().has_active_for_origin(&dot_id, "schedule:manager").unwrap());
+        s.tasks().set_status(&round.id, TaskStatus::WaitingApproval, None).unwrap();
+        assert!(s.tasks().has_active_for_origin(&dot_id, "schedule:manager").unwrap());
+        s.tasks().set_status(&round.id, TaskStatus::WaitingUser, None).unwrap();
+        assert!(!s.tasks().has_active_for_origin(&dot_id, "schedule:manager").unwrap());
+    }
+
+    #[test]
+    fn delegation_is_not_dispatched_before_it_is_registered() {
+        let (mut s, dot_id) = with_dot();
+        let task = s.tasks().create(TaskCreate { dot_id, prompt: "Pedido".into(), origin: Some("delegation:pending".into()), ..Default::default() }, None).unwrap();
+        assert!(s.tasks().queued(10).unwrap().is_empty());
+        assert!(s.tasks().claim_queued(&task.id, 1).unwrap().is_none());
+        s.tasks().set_origin(&task.id, "delegation:registered").unwrap();
+        assert_eq!(s.tasks().queued(10).unwrap().len(), 1);
+        assert!(s.tasks().claim_queued(&task.id, 1).unwrap().is_some());
+    }
+
+    #[test]
     fn task_and_execution_lifecycle() {
         let (mut s, dot_id) = with_dot();
         let t = s.tasks().create(TaskCreate { dot_id: dot_id.clone(), prompt: "Fazer X".into(), ..Default::default() }, Some(EngineKind::Claude)).unwrap();

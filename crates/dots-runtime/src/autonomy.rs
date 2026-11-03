@@ -97,14 +97,15 @@ impl RuntimeService {
         Ok(())
     }
 
-    /// A agenda padrao nao empilha tarefas se o gerente ja esta ocupado ou pausado.
+    /// A agenda padrao nao empilha suas proprias rodadas, mesmo quando ha outros trabalhos em curso.
     pub async fn skip_autonomy_schedule(&self, schedule: &Schedule) -> DotsResult<bool> {
         let key = manager_schedule_key(&schedule.dot_id);
-        let (marker, dot, open) = self.storage.call({
+        let origin = format!("schedule:{}", schedule.id);
+        let (marker, dot, active) = self.storage.call({
             let id = schedule.dot_id.clone();
-            move |st| Ok((st.settings().get(&key)?, st.dots().get(&id)?, st.tasks().has_open_for_dot(&id)?))
+            move |st| Ok((st.settings().get(&key)?, st.dots().get(&id)?, st.tasks().has_active_for_origin(&id, &origin)?))
         }).await?;
         Ok(marker.as_ref().and_then(|s| s.value.as_str()) == Some(schedule.id.as_str())
-            && (dot.status != DotStatus::Active || open))
+            && (dot.status != DotStatus::Active || active))
     }
 }
