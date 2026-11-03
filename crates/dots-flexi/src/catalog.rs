@@ -74,7 +74,7 @@ pub fn catalog() -> &'static [FlexiTool] {
         FlexiTool { name: "flexi_reativar_anuncios", description: "Reativa anuncios pausados.", method: "POST", path: "/api/gestao-marketplaces/anuncios/reativar", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_finalizar_anuncios", description: "FINALIZA anuncios (irreversivel no marketplace).", method: "POST", path: "/api/gestao-marketplaces/anuncios/finalizar", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", true)], risk: C, group: "anuncios" },
         FlexiTool { name: "flexi_promocoes_anuncio", description: "Lista promocoes de um anuncio.", method: "GET", path: "/api/gestao-marketplaces/anuncios/{id}/promocoes", params_in: ParamsIn::Query, params: &[("id", "integer", "id do anuncio", true)], risk: R, group: "anuncios" },
-        FlexiTool { name: "flexi_preparar_criacao", description: "Prepara a criacao de anuncios no Mercado Livre ou Shopee a partir de produtos (validacoes, categoria, atributos). Passo 1 de 2. O Google Shopping (marketplace 2) nao usa este passo: va direto a flexi_criar_anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/preparar-criacao", params_in: ParamsIn::Body, params: &[("produto_id", "integer", "", false), ("produto_familia_marketplace_id", "integer", "", false), ("marketplace", "integer", "0 ML, 1 Shopee", true), ("marketplace_conta_id", "integer", "", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_preparar_criacao", description: "Prepara a criacao de anuncios no Mercado Livre ou Shopee a partir de produtos (validacoes, categoria, atributos). Para ML, informe listing_type_id apenas quando o tipo estiver comprovado e confira a validacao da conta e categoria. Esta preparacao e generica: nao confirma recuperacao nem o conteudo final de um anuncio existente. O Google Shopping (marketplace 2) nao usa este passo: va direto a flexi_criar_anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/preparar-criacao", params_in: ParamsIn::Body, params: &[("produto_id", "integer", "", false), ("produto_familia_marketplace_id", "integer", "", false), ("marketplace", "integer", "0 ML, 1 Shopee", true), ("marketplace_conta_id", "integer", "id da conta no Flexi", true), ("listing_type_id", "string", "ML: tipo de anuncio comprovado, por exemplo gold_pro ou gold_special", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_criar_anuncio", description: "Cria o anuncio no Flexi (passo 2 de 2; no ML e Shopee use os dados de flexi_preparar_criacao). Google Shopping: dados {produto_id, marketplace: 2, marketplace_conta_id: '<id da conta de flexi_google_merchant_contas, so digitos>', quantidade_anuncios: 1}. Nao publica no marketplace.", method: "POST", path: "/api/gestao-marketplaces/anuncios/criar", params_in: ParamsIn::Body, params: &[("dados", "object", "payload: produto_id, marketplace (0 ML, 1 Shopee, 2 Google Shopping), marketplace_conta_id (Shopee/Google) ou user_id (ML), quantidade_anuncios, listing_type_id (ML)", true)], risk: C, group: "anuncios" },
         FlexiTool { name: "flexi_publicar_anuncio", description: "PUBLICA um anuncio no marketplace (ML, Shopee ou Google Shopping: envia o item ao Merchant Center). Acao irreversivel; sempre pede permissao.", method: "POST", path: "/api/gestao-marketplaces/anuncios/publicar", params_in: ParamsIn::Body, params: &[("id", "integer", "id do anuncio", true), ("validar_antes_publicar", "integer", "1 para validar", false)], risk: C, group: "anuncios" },
         FlexiTool { name: "flexi_copiar_para_shopee", description: "Copia um anuncio do Mercado Livre para a Shopee.", method: "POST", path: "/api/gestao-marketplaces/anuncios/copiar-para-shopee", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio ML", true), ("marketplace_conta_id", "integer", "conta Shopee destino", true)], risk: C, group: "anuncios" },
@@ -179,6 +179,12 @@ pub fn build_request(tool: &FlexiTool, args: &Value) -> Result<(String, Option<V
         rest.insert("incluir_facetas_legacy".into(), json!(0));
         rest.insert("incluir_facetas_v2".into(), json!(0));
     }
+    // O preflight ML identifica a conta por user_id; Shopee usa marketplace_conta_id.
+    if tool.name == "flexi_preparar_criacao" && rest.get("marketplace").and_then(Value::as_i64) == Some(0) {
+        if let Some(account) = rest.get("marketplace_conta_id").cloned() {
+            rest.insert("user_id".into(), account);
+        }
+    }
     // Google Ads exige confirm=true explicito nas escritas.
     if tool.group == "googleads" && tool.method == "POST" {
         rest.insert("confirm".into(), Value::Bool(true));
@@ -232,6 +238,32 @@ mod tests {
             assert_eq!(query.unwrap(), json!({ "anuncio_id": 39801 }));
             assert!(body.is_none());
         }
+    }
+
+    #[test]
+    fn creation_preflight_passes_ml_account_and_listing_type_without_changing_shopee() {
+        let tool = find_tool("flexi_preparar_criacao").unwrap();
+        assert_eq!(tool.risk, ToolRisk::Read);
+        let defs = tool_definitions();
+        let definition = defs.iter().find(|d| d["name"] == tool.name).unwrap();
+        assert_eq!(definition["inputSchema"]["properties"]["listing_type_id"]["type"], "string");
+        let (path, query, body) = build_request(tool, &json!({
+            "produto_id": 1499601, "marketplace": 0, "marketplace_conta_id": 201, "listing_type_id": "gold_pro"
+        })).unwrap();
+        assert_eq!(path, "/api/gestao-marketplaces/anuncios/preparar-criacao");
+        assert!(query.is_none());
+        assert_eq!(body.unwrap(), json!({
+            "produto_id": 1499601, "marketplace": 0, "marketplace_conta_id": 201,
+            "user_id": 201, "listing_type_id": "gold_pro"
+        }));
+        let (_, _, other_account) = build_request(tool, &json!({
+            "produto_id": 1499601, "marketplace": 0, "marketplace_conta_id": 101
+        })).unwrap();
+        assert_eq!(other_account.unwrap(), json!({ "produto_id": 1499601, "marketplace": 0, "marketplace_conta_id": 101, "user_id": 101 }));
+        let (_, _, shopee) = build_request(tool, &json!({
+            "produto_id": 1499601, "marketplace": 1, "marketplace_conta_id": 201
+        })).unwrap();
+        assert_eq!(shopee.unwrap(), json!({ "produto_id": 1499601, "marketplace": 1, "marketplace_conta_id": 201 }));
     }
 
     #[test]
