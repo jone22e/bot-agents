@@ -304,6 +304,42 @@ async fn configured_subspecialty_reaches_manager_and_employee_after_edit() {
 }
 
 #[tokio::test]
+async fn delegation_can_include_the_current_flexi_instructions() {
+    let flexi = Flexi::start_at(false, 205).await;
+    let rt = start().await;
+    let c: AppConnection = serde_json::from_value(rt.call("apps.flexi.connect", json!({ "base_url": flexi.url, "email": "agente@teste.com", "senha": "segredo123" })).await).unwrap();
+    reqwest::get(format!("{}/__especialidades", flexi.url)).await.unwrap();
+    rt.call("apps.flexi.create_team", json!({ "id": c.id })).await;
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    let manager = dots.iter().find(|dot| dot.name == "Gerente de Mercado Livre").unwrap();
+    let hired = rt.run(manager, r#"FLEXI:dots_hire_employee:{"name":"Bia","role":"Operadora"}"#).await;
+    assert!(hired.result_text.as_deref().unwrap_or_default().starts_with("OK 'Bia' foi contratado"), "{:?}", hired.result_text);
+    let dots: Vec<Dot> = serde_json::from_value(rt.call("dots.list", json!({})).await).unwrap();
+    let employee = dots.iter().find(|dot| dot.name == "Bia").unwrap();
+
+    reqwest::get(format!("{}/__especialidades_update", flexi.url)).await.unwrap();
+    let delegated = rt.run(manager, r#"FLEXI:dots_delegate:{"to":"Bia","request":"ECHO_PROMPT:caso completo","context":"conta autorizada 201","include_instructions":true}"#).await;
+    assert!(delegated.result_text.as_deref().unwrap_or_default().starts_with("OK Delegacao"), "{:?}", delegated.result_text);
+    let started = Instant::now();
+    let child = loop {
+        let tasks: Vec<Task> = serde_json::from_value(rt.call("tasks.list", json!({ "dot_id": employee.id, "limit": 100 })).await).unwrap();
+        if let Some(task) = tasks.into_iter().find(|task| task.parent_task_id.as_deref() == Some(delegated.id.as_str())) { break task; }
+        assert!(started.elapsed() < Duration::from_secs(15));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(child.prompt.contains("conta autorizada 201"));
+    assert!(child.prompt.contains("Rotina versao atualizada."), "{}", child.prompt);
+    assert!(!child.prompt.contains("Rotina versao inicial."));
+
+    let delegated = rt.run(manager, r#"FLEXI:dots_delegate:{"to":"Bia","request":"ECHO_PROMPT:caso sem roteiro"}"#).await;
+    assert!(delegated.result_text.as_deref().unwrap_or_default().starts_with("OK Delegacao"), "{:?}", delegated.result_text);
+    let tasks: Vec<Task> = serde_json::from_value(rt.call("tasks.list", json!({ "dot_id": employee.id, "limit": 100 })).await).unwrap();
+    let child = tasks.iter().find(|task| task.parent_task_id.as_deref() == Some(delegated.id.as_str())).unwrap();
+    assert_eq!(child.prompt, "ECHO_PROMPT:caso sem roteiro");
+    rt.stop();
+}
+
+#[tokio::test]
 async fn browser_login_creates_connection_and_reuses_it_on_relogin() {
     let flexi = Flexi::start_at(false, 25).await;
     let rt = start().await;

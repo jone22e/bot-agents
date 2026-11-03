@@ -65,15 +65,18 @@ impl RuntimeService {
     /// Ponto de entrada do scheduler. Nunca retorna erro para o chamador: toda falha vira estado da tarefa.
     pub async fn run_task(self: Arc<Self>, task: Task) {
         let task_id = task.id.clone();
-        if let Err(e) = self.clone().run_task_inner(task).await {
+        if let Err(e) = self.clone().run_task_inner(task.clone()).await {
             tracing::error!(task = %task_id, error = %e, "falha ao executar tarefa");
-            let (tid, msg) = (task_id.clone(), e.message().to_string());
+            let error_message = e.message().to_string();
+            let (tid, msg) = (task_id.clone(), error_message.clone());
             let target = match e {
                 DotsError::Engine(_) | DotsError::Validation(_) | DotsError::NotFound(_) => TaskStatus::WaitingUser,
                 _ => TaskStatus::Failed,
             };
             let _ = self.storage.call(move |s| s.tasks().set_status(&tid, target, Some(&msg))).await;
             self.events.emit("task.changed", json!({ "id": task_id, "status": target.as_str() }));
+            // Falhas antes de criar uma execucao tambem precisam chegar ao gerente da delegacao.
+            self.on_task_finished(&task, target, "", Some(&error_message)).await;
         }
         self.scheduler_notify.notify_one();
     }
@@ -384,7 +387,13 @@ impl RuntimeService {
         self.registry.unregister(&execution.id, &token);
         let _ = std::fs::remove_file(&token_file);
         let _ = self.storage.call({ let (eid, err, u) = (execution.id.clone(), error.clone(), std::mem::take(&mut usage)); move |st| st.executions().finish(&eid, status, None, err.as_deref(), cost, &u) }).await;
-        let result_text = final_text.clone().unwrap_or_else(|| text_acc.clone());
+        let mut result_text = final_text.clone().unwrap_or_else(|| text_acc.clone());
+        let request = task.prompt.to_lowercase();
+        if status == ExecutionStatus::Completed && task.origin.starts_with("delegation:")
+            && !tool_names.iter().any(|name| name.contains("dots_browser_"))
+            && (request.contains("navegador") || request.contains("dots_browser")) {
+            result_text.push_str("\n\n[Esta tentativa nao registrou chamadas ao navegador DOTS; uma consulta atual no navegador nao foi comprovada.]");
+        }
         let safe_conflict_retry = status == ExecutionStatus::Failed && retry_preflight_thread_conflict(
             engine, resume_session.is_some(), engine_started,
             !tool_names.is_empty() || !result_text.is_empty(), error.as_deref(), t.attempts, task.max_attempts,
@@ -493,6 +502,7 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
     }
     s.push_str("- Em trabalhos longos, grave pontos de controle com dots_checkpoint apos cada etapa concluida.\n");
     if dot.role == DotRole::Supervisor {
+        s.push_str("\n- Se o funcionario precisar do roteiro completo de suas instrucoes, use dots_delegate com include_instructions=true e informe no pedido e contexto os dados e autorizacoes especificos. O DOTS anexa suas instrucoes atuais; o funcionario nao as recebe automaticamente sem essa opcao. Se houver subespecialidade adequada, prefira vincula-la na contratacao para que o funcionario receba a rotina correspondente.\n");
         s.push_str("\nVoce e um SUPERVISOR (gerente): divide objetivos em pedidos claros, delega a DOTs da equipe (dots_list_team, dots_delegate), acompanha (dots_delegation_status), identifica bloqueios e consolida as entregas. Voce NUNCA executa o trabalho da equipe, mesmo sem nenhum funcionario: so consulta, delega, acompanha e responde; acoes que alteram algo sao negadas para voce. Se nao houver funcionario para a tarefa (ou todos estiverem ocupados com outra coisa), contrate um com dots_hire_employee: voce cria o nome (unico, de pessoa) e define a funcao e as instrucoes; depois delegue a ele. Delegacoes sao assincronas: apos delegar, termine o turno dizendo o que aguarda; cada entrega gera uma tarefa de acompanhamento para voce e, ao fim, outra de consolidacao. Ao receber cada acompanhamento, avalie o resultado e o estado da equipe por iniciativa propria, corrija bloqueios e oriente quem ainda trabalha, sem esperar o usuario cobrar. Perguntas e pedidos de permissao dos seus funcionarios sobre pedidos delegados chegam a voce como tarefas: responda com dots_answer_question e decida com dots_decide_approval (aprove o que esta dentro do pedido e do que o usuario autorizou; acoes irreversiveis que o usuario nao autorizou, confirme antes com ele). Use dots_ask_user so quando uma decisao for do usuario. Se um funcionario esta PARADO (interrompido ou com falha), retome com dots_resume_delegation ou delegue de novo com instrucoes melhores, em vez de so relatar que ele nao esta trabalhando. Voce nao pode alterar permissoes de ninguem. Voce pode pausar um funcionario da equipe (dots_pause_employee: ele para de receber trabalho ate ser retomado) e retoma-lo (dots_resume_employee), sem aprovacao do usuario. Se um funcionario errar de forma grave ou repetir o mesmo erro depois de instrucoes melhores, voce pode demiti-lo com dots_dismiss_employee (informe o motivo e a licao); isso passa pela aprovacao do usuario, EXCLUI o funcionario e registra a licao para toda a equipe; em seguida contrate um substituto com dots_hire_employee e delegue a ele de novo.\n");
         s.push_str("- Ao iniciar uma rodada e ao acompanhar uma entrega, consulte todas as metas vigentes e o estado da equipe. Para cada frente com meta pendente, verifique se ja ha trabalho em andamento; quando houver funcionario adequado e disponivel e um proximo passo concreto autorizado, delegue ou retome o trabalho dessa frente. Acompanhe as frentes em paralelo sem duplicar tarefas nem repetir acoes concluidas. Um bloqueio em uma frente nao interrompe as demais; se nao puder avancar em alguma, registre o motivo real e o que falta. Lance na meta somente resultados confirmados.\n");
         if let Some((members, limit)) = hiring {

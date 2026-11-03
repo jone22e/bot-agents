@@ -326,7 +326,7 @@ impl RuntimeService {
                 let cp = self.storage.call(move |st| st.checkpoints().create(&tid, &eid, &step, &state, "", &results, &[], &next, &arts, "dot")).await?;
                 Ok(ToolOutput::ok(format!("checkpoint gravado ({}): {}", cp.id, cp.step)))
             }
-            "dots_delegate" => self.delegate(ctx, &s("to"), &s("request"), args.get("context").and_then(|c| c.as_str())).await,
+            "dots_delegate" => self.delegate(ctx, &s("to"), &s("request"), args.get("context").and_then(|c| c.as_str()), args.get("include_instructions").and_then(|v| v.as_bool()).unwrap_or(false)).await,
             "dots_delegation_status" => self.delegation_status(ctx, args.get("id").and_then(|c| c.as_str())).await,
             "dots_cancel_delegation" => self.cancel_delegation(ctx, &s("id")).await,
             "dots_resume_delegation" => self.resume_delegation(ctx, &s("id")).await,

@@ -47,7 +47,7 @@ const trustLabel = computed(() => TRUST_OPTIONS.find((o) => o.value === form.tru
 /** Com o Flexi conectado, as permissoes sao sobre o Flexi, nao sobre arquivos. */
 const FLEXI_TRUST: { value: "read" | "write"; title: string; description: string }[] = [
   { value: "read", title: "Somente consulta no Flexi", description: "Le anuncios, perguntas, analises e campanhas. Qualquer alteracao pede sua permissao." },
-  { value: "write", title: "Pode editar no Flexi", description: "Altera precos, conteudo, estoque, respostas e campanhas sem perguntar. Criar, publicar, finalizar e copiar anuncios sempre pedem permissao." },
+  { value: "write", title: "Pode editar no Flexi", description: "Permite alterações conforme as regras do DOTS. Criar, publicar, finalizar e copiar anúncios exigem aprovação." },
 ];
 const TIPOS = [
   { id: "gerente" as const, title: "Gerente", text: "Recebe objetivos, divide o trabalho e delega aos funcionários da equipe dele. Acompanha e consolida.", icon: Users },
@@ -259,6 +259,7 @@ async function create() {
                 <div class="mt-2 space-y-1">
                   <label v-for="o in FLEXI_TRUST" :key="o.value" class="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-zinc-800/60"><input v-model="form.trust" type="radio" :value="o.value" class="mt-1" /><span><span class="block text-sm text-zinc-200">{{ o.title }}</span><span class="block text-xs text-zinc-500">{{ o.description }}</span></span></label>
                 </div>
+                <p v-if="form.tipo === 'gerente'" class="mt-2 text-xs text-zinc-400">O gerente consulta e delega; ele não faz alterações operacionais diretamente. Funcionários contratados por ele recebem essa permissão inicial.</p>
               </div>
             </template>
             <template v-else>
