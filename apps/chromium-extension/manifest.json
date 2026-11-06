@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "DOTS - Chromium pessoal",
+  "version": "0.1.3",
+  "description": "Conecta e reutiliza abas do Chromium pessoal com o runtime DOTS.",
+  "permissions": ["nativeMessaging", "tabs", "scripting", "storage", "alarms"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" }
+}

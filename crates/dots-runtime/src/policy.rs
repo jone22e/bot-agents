@@ -371,6 +371,9 @@ impl ExecutionContext {
                 if url.is_empty() || url == "about:blank" {
                     return Err(DotsError::Validation("o navegador do DOT nao tem pagina aberta: use dots_browser_open antes".into()));
                 }
+                if !(url.starts_with("http://") || url.starts_with("https://")) || host.is_empty() {
+                    return Err(DotsError::Validation("acoes no navegador exigem uma pagina http ou https".into()));
+                }
                 let on_app = is_connected_browser_host(&host, &self.app_hosts);
                 if !on_app && !browser_network_allowed {
                     return Err(DotsError::Unauthorized(format!("a pagina atual ({host}) nao e de um app conectado e o acesso a rede esta desabilitado para este DOT")));
@@ -615,6 +618,7 @@ mod tests {
         let mut n = ctx(dir.path(), AutoApproveLevel::Exec);
         n.policy.allow_network = true;
         assert!(matches!(n.evaluate("dots_browser_click", &serde_json::json!({"ref": 1, "_page_url": "https://outro.com/", "_element": "link \"Mais\""})), Decision::Allow { risk: RiskLevel::Exec, .. }));
+        assert!(matches!(n.evaluate("dots_browser_read", &serde_json::json!({"_page_url": "chrome://settings/passwords"})), Decision::Deny(_)), "paginas internas do Chrome nao ficam acessiveis ao DOT");
         assert!(matches!(n.evaluate("dots_browser_click", &serde_json::json!({"ref": 1, "_page_url": "https://outro.com/", "_element": "button \"Comprar agora\""})), Decision::NeedsApproval { risk: RiskLevel::Critical, .. }));
     }
 

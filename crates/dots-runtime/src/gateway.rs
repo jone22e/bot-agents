@@ -349,12 +349,14 @@ impl RuntimeService {
             "dots_notify_user" => self.notify_user(ctx, &s("title"), &s("detail"), &s("action")).await,
             "dots_browser_open" => {
                 let url = s("url");
-                let browser = self.browsers.get(&ctx.dot_id, &self.browser_options().await).await?;
-                match self.browser_login_for_app(&ctx.dot_id, &browser, &url).await {
-                    Ok(true) => tracing::info!(dot = %ctx.dot_id, "navegador: sessao do app conectado aplicada"),
-                    Ok(false) => {}
-                    Err(DotsError::Unauthorized(m)) => return Ok(ToolOutput::err(format!("navegador: {m}"))),
-                    Err(e) => tracing::warn!(dot = %ctx.dot_id, error = %e, "navegador: nao foi possivel aplicar a sessao do app"),
+                let browser = self.agent_browser_get(&ctx.dot_id).await?;
+                if let crate::browser_ipc::AgentBrowser::Isolated(b) = &browser {
+                    match self.browser_login_for_app(&ctx.dot_id, b, &url).await {
+                        Ok(true) => tracing::info!(dot = %ctx.dot_id, "navegador: sessao do app conectado aplicada"),
+                        Ok(false) => {}
+                        Err(DotsError::Unauthorized(m)) => return Ok(ToolOutput::err(format!("navegador: {m}"))),
+                        Err(e) => tracing::warn!(dot = %ctx.dot_id, error = %e, "navegador: nao foi possivel aplicar a sessao do app"),
+                    }
                 }
                 match browser.open(&url).await {
                     Ok(page) => Ok(ToolOutput::ok(tools::cap(page.render()))),
@@ -362,7 +364,7 @@ impl RuntimeService {
                 }
             }
             "dots_browser_click" | "dots_browser_type" | "dots_browser_press" | "dots_browser_select" | "dots_browser_read" => {
-                let Some(browser) = self.browsers.running(&ctx.dot_id).await else {
+                let Some(browser) = self.agent_browser_running(&ctx.dot_id).await else {
                     return Ok(ToolOutput::err("navegador: nenhuma pagina aberta; use dots_browser_open antes".into()));
                 };
                 let r = browser_ref(args);
@@ -413,7 +415,7 @@ impl RuntimeService {
         } else {
             args = json!({});
         }
-        let Some(browser) = self.browsers.running(dot_id).await else { return args };
+        let Some(browser) = self.agent_browser_running(dot_id).await else { return args };
         args["_page_url"] = json!(browser.current_url().await.unwrap_or_default());
         if let Some(d) = browser.dialog() {
             args["_dialog"] = json!(d);

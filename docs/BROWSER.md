@@ -9,6 +9,34 @@ implementado em `crates/dots-runtime/src/browser.rs`.
 Por ser ferramenta do gateway, funciona igual nos tres motores (Claude, Codex, AGY) e passa pela
 mesma politica, aprovacao e auditoria das demais.
 
+## Chromium pessoal no Ubuntu (2026-11-05)
+
+Em **Conectar aplicativos > Navegador dos DOTs**, o usuario pode escolher **Meu Chromium pessoal**.
+O DOTS exporta uma extensao para `<dados>/chromium-extension/`. Carregue essa pasta como extensao
+sem compactacao no perfil do Chromium em que os aplicativos (WhatsApp Web, Gmail etc.) estao
+logados. Copie o ID de 32 letras mostrado pelo Chromium para a mesma tela do DOTS. O runtime
+registra `com.c2s.dots` em `~/.config/chromium/NativeMessagingHosts/`, restrito ao ID informado.
+
+A extensao procura uma aba ja aberta do mesmo site e a compartilha entre os DOTs. Se nao houver,
+cria uma unica aba para aquele site e a reutiliza nas proximas visitas. Acoes em uma aba compartilhada
+exigem que o DOT a leia novamente se outro DOT a tiver usado. Abas criadas pela extensao que se tornam
+duplicadas sao fechadas; abas preexistentes do usuario sao preservadas. Para `web.whatsapp.com`,
+identifica a aba utilizavel, pois o WhatsApp Web nao mantem duas abas ativas ao mesmo tempo. Se houver
+varias abas do WhatsApp, identifica a que
+mostra as conversas e descarta a que exibe o aviso de outra janela. Se ainda houver mais de uma
+escolha, usa a aba ativa; sem escolha unica, pede que o usuario selecione a aba.
+O usuario abre um site pelo painel
+**Computador do DOT** (a aba ganha foco para o login manual); as ferramentas `dots_browser_*`
+agem na aba correspondente, com as mesmas permissoes por dominio, aprovacoes e auditoria do
+navegador isolado. O modo pessoal usa apenas abas do site solicitado pelo DOT, nao copia cookies e nao reinicia o
+Chromium. O painel mostra a URL e o estado da extensao, sem screencast.
+
+O transporte da extensao e Native Messaging pelo processo `dotsd chromium-host`; nao abre porta
+de depuracao ou de rede. A extensao usa `chrome.scripting` para leitura, clique, digitacao e
+selecao. `dots_browser_press` nesse modo aceita apenas Enter/Escape; prefira clicar no botao da
+pagina para enviar ou confirmar. A conexao no Chromium pessoal do Ubuntu e o compartilhamento da
+mesma aba por tres DOTs foram verificados; a instalacao pelo Chromium Snap ainda nao foi testada.
+
 ## Ferramenta
 
 `dots_browser_open { url }`: abre a URL (http/https) na aba de trabalho do navegador do DOT, espera

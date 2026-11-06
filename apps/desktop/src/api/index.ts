@@ -44,6 +44,8 @@ export interface FlexiUser {
 
 /** Estado do navegador proprio de um DOT (IPC `browser.status`). */
 export interface BrowserStatus {
+  mode: "isolated" | "personal_chrome";
+  connected?: boolean;
   running: boolean;
   watching: boolean;
   url: string;
@@ -93,6 +95,8 @@ export const api = {
     status: (dot_id: string) => ipcCall<BrowserStatus>("browser.status", { dot_id }),
     watch: (dot_id: string) => ipcCall<BrowserStatus & { started: boolean }>("browser.watch", { dot_id }),
     unwatch: (dot_id: string) => ipcCall<{ ok: boolean }>("browser.unwatch", { dot_id }),
+    openPersonal: (dot_id: string, url: string) => ipcCall<BrowserStatus>("browser.open_personal", { dot_id, url }),
+    personalSetup: (extension_id?: string) => ipcCall<{ path: string; extension_id: string | null; connected: boolean }>("browser.personal.setup", { extension_id: extension_id ?? null }),
   },
   dots: {
     list: (includeArchived = false) => ipcCall<Dot[]>("dots.list", { include_archived: includeArchived }),

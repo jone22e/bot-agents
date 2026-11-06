@@ -173,7 +173,8 @@ impl RuntimeService {
             let Some(mid) = team.manager_dot_id else { return Ok(None) };
             Ok(Some(s.dots().get(&mid)?.name))
         } }).await.ok().flatten();
-        let system_instructions = build_instructions(&effective_dot, &policy, &dirs, flexi_context, &app_hosts, &lessons, hiring, manager_name.as_deref());
+        let personal_chrome = self.browser_mode().await == "personal_chrome";
+        let system_instructions = build_instructions(&effective_dot, &policy, &dirs, flexi_context, &app_hosts, personal_chrome, &lessons, hiring, manager_name.as_deref());
         // Conversa com turnos anteriores do DOT mas sem sessao do motor: a sessao foi encerrada (por tamanho ou falha).
         let session_reset = resume_session.is_none()
             && match &task.conversation_id {
@@ -454,7 +455,7 @@ impl RuntimeService {
 
 /// Instrucoes estaveis do DOT (identidade, regras, papel, licoes). Nao dependem da tarefa: ficam iguais entre
 /// turnos da mesma conversa, o que preserva o cache de prompt do CLI em sessoes retomadas.
-fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], app_context: Option<&str>, browser_hosts: &[String], lessons: &[dots_core::Dismissal], hiring: Option<(usize, u32)>, manager: Option<&str>) -> String {
+fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs: &[AuthorizedDir], app_context: Option<&str>, browser_hosts: &[String], personal_chrome: bool, lessons: &[dots_core::Dismissal], hiring: Option<(usize, u32)>, manager: Option<&str>) -> String {
     let mut s = String::new();
     s.push_str(&format!("Voce e \"{}\", um DOT (trabalhador digital persistente) na plataforma DOTS.\n", dot.name));
     if !dot.description.trim().is_empty() {
@@ -477,10 +478,18 @@ fn build_instructions(dot: &dots_core::Dot, policy: &dots_core::ToolPolicy, dirs
     s.push_str("- Use as ferramentas do servidor MCP `dots` (dots_read_file, dots_write_file, dots_list_dir, dots_search, dots_run_command, dots_git, dots_remember, dots_recall) para acessar arquivos, comandos e memoria. Elas sao autorizadas pelo runtime; uma negacao e definitiva: nao tente contornar.\n");
     s.push_str("- Ao chamar uma ferramenta que pode pedir aprovacao, inclua _dots_approval_assessment com confidence_percent (inteiro de 0 a 100: sua estimativa de a acao atingir o resultado esperado, nao chance de aprovacao) e reversible (true somente se souber como desfazer os efeitos). Se nao puder avaliar honestamente os dois, omita o campo. Essa avaliacao e informativa e nao muda a politica de permissao.\n");
     s.push_str("- Voce so trabalha quando chega uma tarefa: passado um horario, nada te acorda sozinho. Para fazer algo depois ou de tempos em tempos (rodadas, relatorios por hora, \"proxima rodada as HH:MM\"), crie um agendamento com dots_schedule_create; no horario o runtime cria a tarefa com o pedido. NUNCA prometa um horario futuro sem ter agendado. Antes de agendar, confira dots_schedule_list para nao duplicar; cancele com dots_schedule_cancel o que nao for mais preciso. Diga ao usuario o que agendou e quando.\n");
-    if policy.allow_network || !browser_hosts.is_empty() {
-        s.push_str("- Voce tem um navegador proprio (perfil isolado deste DOT, logins persistem): dots_browser_open abre uma URL e devolve a pagina em texto com [ref=N] por elemento; para agir nela use dots_browser_click (clicar), dots_browser_type (digitar), dots_browser_select (escolher opcao), dots_browser_press (teclas, e Enter/Escape em dialogos do navegador) e dots_browser_read (ler de novo). Cada acao devolve a pagina atualizada com refs novos. E o UNICO navegador autorizado: nao use ferramentas de computador ou navegador do proprio assistente (cua, computer use, browser use); elas sao negadas e o usuario nao ve nada. O que voce abre com dots_browser_open o usuario acompanha ao vivo no painel Computador. Use as ferramentas diretamente, sem perguntar antes com dots_ask_user: o runtime pede a aprovacao necessaria. Cliques que gravam ou sao irreversiveis (Salvar, Excluir, Publicar...) passam pela aprovacao do proprio runtime.");
+    if policy.allow_network || !browser_hosts.is_empty() || personal_chrome {
+        if personal_chrome {
+            s.push_str("- Voce usa uma aba propria no Chromium pessoal do usuario, no perfil em que ele instalou a extensao DOTS. Os logins desse perfil estao disponiveis na sua aba. Use somente as ferramentas dots_browser_* do DOTS; nao acesse outras abas nem use ferramentas nativas de navegador/computador do motor. dots_browser_open abre a URL nessa aba; dots_browser_read devolve texto e refs de elementos; dots_browser_click, dots_browser_type, dots_browser_select e dots_browser_press agem nela. O usuario pode navegar ou fazer login manualmente na mesma aba. Confira a pagina atual antes de agir. Use as ferramentas diretamente, sem perguntar antes com dots_ask_user: o runtime pede a aprovacao necessaria. Cliques que gravam ou sao irreversiveis passam pela aprovacao do proprio runtime.");
+        } else {
+            s.push_str("- Voce tem um navegador proprio (perfil isolado deste DOT, logins persistem): dots_browser_open abre uma URL e devolve a pagina em texto com [ref=N] por elemento; para agir nela use dots_browser_click (clicar), dots_browser_type (digitar), dots_browser_select (escolher opcao), dots_browser_press (teclas, e Enter/Escape em dialogos do navegador) e dots_browser_read (ler de novo). Cada acao devolve a pagina atualizada com refs novos. E o UNICO navegador autorizado: nao use ferramentas de computador ou navegador do proprio assistente (cua, computer use, browser use); elas sao negadas e o usuario nao ve nada. O que voce abre com dots_browser_open o usuario acompanha ao vivo no painel Computador. Use as ferramentas diretamente, sem perguntar antes com dots_ask_user: o runtime pede a aprovacao necessaria. Cliques que gravam ou sao irreversiveis (Salvar, Excluir, Publicar...) passam pela aprovacao do proprio runtime.");
+        }
         if !browser_hosts.is_empty() {
-            s.push_str(&format!(" Apps conectados que ja abrem logados: {}.", browser_hosts.join(", ")));
+            if personal_chrome {
+                s.push_str(&format!(" Apps conectados com dominio autorizado: {}. No Chromium pessoal, confirme se o usuario ja entrou no site.", browser_hosts.join(", ")));
+            } else {
+                s.push_str(&format!(" Apps conectados que ja abrem logados: {}.", browser_hosts.join(", ")));
+            }
         }
         if !policy.allow_network {
             s.push_str(" Para sites externos, use dots_browser_open: o DOTS pedira permissao ao usuario para o dominio antes de abrir. Se o usuario negar, nao tente contornar.");
@@ -589,14 +598,14 @@ mod tests {
         let policy = dots_core::ToolPolicy::default_for("d");
         let mems: Vec<dots_core::Memory> = (0..100).map(|i| dots_core::Memory { id: i.to_string(), dot_id: "d".into(), kind: MemoryKind::LongTerm, content: "x".repeat(200), importance: 0, source: None, created_at: dots_core::now(), updated_at: dots_core::now() }).collect();
         let lesson = dots_core::Dismissal { id: "x".into(), team_id: Some("t".into()), team_name: "Mercado Livre".into(), manager_dot_id: Some("m".into()), manager_name: "Milei".into(), dot_id: Some("d".into()), dot_name: "Lula".into(), reason: "publicou anuncio sem revisar o preco".into(), lesson: "revisar o preco antes de publicar".into(), memories_wiped: 3, created_at: dots_core::now() };
-        let s = build_instructions(&dot, &policy, &[], Some("Mapa do app: teste"), &["flexi.exemplo.com".to_string()], &[lesson], None, None);
+        let s = build_instructions(&dot, &policy, &[], Some("Mapa do app: teste"), &["flexi.exemplo.com".to_string()], false, &[lesson], None, None);
         assert!(s.contains("avise com dots_notify_user"), "DOT sem gerente avisa o usuario");
-        let e = build_instructions(&dot, &policy, &[], None, &[], &[], None, Some("Milei"));
+        let e = build_instructions(&dot, &policy, &[], None, &[], false, &[], None, Some("Milei"));
         assert!(e.contains("NAO use dots_notify_user") && e.contains("seu gerente Milei") && !e.contains("avise com dots_notify_user"), "funcionario relata ao gerente em vez de avisar o usuario");
         assert!(s.contains("registre na hora com dots_goal_create"), "DOT sem gerente registra metas");
         assert!(e.contains("NAO use dots_goal_*") && !e.contains("dots_goal_create"), "funcionario nao registra metas");
         let gerente = dots_core::Dot { role: DotRole::Supervisor, ..dot.clone() };
-        let nested = build_instructions(&gerente, &policy, &[], None, &[], &[], Some((0, 3)), Some("Milei"));
+        let nested = build_instructions(&gerente, &policy, &[], None, &[], false, &[], Some((0, 3)), Some("Milei"));
         assert!(nested.contains("registre na hora com dots_goal_create"), "gerente de subequipe registra as metas da propria equipe");
         assert!(nested.contains("consulte todas as metas vigentes e o estado da equipe") && nested.contains("Um bloqueio em uma frente nao interrompe as demais"), "supervisor acompanha todas as frentes e delega trabalho disponivel");
         assert!(!e.contains("consulte todas as metas vigentes e o estado da equipe"), "o principio de coordenacao nao e imposto ao funcionario");
@@ -605,6 +614,8 @@ mod tests {
         assert!(s.contains("dots_browser_open") && s.contains("flexi.exemplo.com"), "navegador aparece por causa do app conectado");
         assert!(s.contains("Use as ferramentas diretamente, sem perguntar antes com dots_ask_user: o runtime pede a aprovacao necessaria") && s.contains("dots_browser_click"), "navegador usa a aprovacao do runtime, com as acoes");
         assert!(s.contains("o DOTS pedira permissao ao usuario para o dominio antes de abrir"), "site externo exige permissao por dominio");
+        let personal = build_instructions(&dot, &policy, &[], None, &[], true, &[], None, None);
+        assert!(personal.contains("Chromium pessoal do usuario") && personal.contains("dots_browser_open"));
         assert!(s.contains("\"QA\"") && s.contains("seja rigoroso"));
         assert!(!s.contains("Memorias relevantes") && !s.contains("continuacao"), "system prompt nao carrega nada que mude entre turnos");
         assert!(s.len() < 6000);

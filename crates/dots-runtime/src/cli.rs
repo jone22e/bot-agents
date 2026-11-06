@@ -7,6 +7,7 @@ pub const HELP: &str = "dotsd - runtime local do DOTS
 USO:
   dotsd [--data-dir <DIR>] [--mode launchd|detached|manual] [--stderr]
   dotsd mcp-gateway [--data-dir <DIR>]   Servidor MCP (stdio) usado pelos CLIs dos motores
+  dotsd chromium-host [--data-dir <DIR>] Host Native Messaging da extensao Chromium
   dotsd call <metodo> [<params-json>] [--data-dir <DIR>]   Chama um metodo IPC do runtime em execucao e imprime o JSON
   dotsd --version
   dotsd --help
@@ -30,6 +31,7 @@ pub enum Command {
     Run(RunArgs),
     /// `dotsd mcp-gateway`: servidor MCP por stdio para os CLIs dos motores.
     McpGateway { data_dir: Option<PathBuf> },
+    ChromiumHost { data_dir: Option<PathBuf> },
     /// `dotsd call <metodo> [params]`: chamada IPC avulsa (diagnostico e manutencao).
     Call { data_dir: Option<PathBuf>, method: String, params: String },
     Version,
@@ -72,6 +74,18 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Command, String> {
             data_dir = std::env::var_os("DOTS_DATA_DIR").map(PathBuf::from);
         }
         return Ok(Command::McpGateway { data_dir });
+    }
+    if it.peek().map(|a| a == "chromium-host").unwrap_or(false) {
+        it.next();
+        let mut data_dir = None;
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--data-dir" => data_dir = Some(PathBuf::from(it.next().ok_or("--data-dir exige um valor")?)),
+                other if other.starts_with("--data-dir=") => data_dir = Some(PathBuf::from(&other["--data-dir=".len()..])),
+                other => return Err(format!("argumento desconhecido: {other}")),
+            }
+        }
+        return Ok(Command::ChromiumHost { data_dir });
     }
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -128,6 +142,7 @@ mod tests {
             _ => panic!(),
         }
         assert!(parse(["call".to_string()].into_iter()).is_err());
+        assert!(matches!(parse(["chromium-host", "--data-dir", "/d"].iter().map(|s| s.to_string())).unwrap(), Command::ChromiumHost { data_dir: Some(path) } if path == PathBuf::from("/d")));
         assert!(parse(["--bogus".to_string()].into_iter()).is_err());
     }
 }

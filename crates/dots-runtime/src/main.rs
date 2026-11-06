@@ -6,6 +6,7 @@ mod autonomy;
 mod browser;
 mod browser_ipc;
 mod cli;
+mod chromium_host;
 mod cli_updates;
 mod delegation;
 mod dismissal;
@@ -23,6 +24,7 @@ mod goals;
 mod lock;
 mod mcp_gateway;
 mod paths;
+mod personal_chrome;
 mod performance;
 mod policy;
 mod registry;
@@ -69,6 +71,14 @@ fn main() {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
             let code = rt.block_on(mcp_gateway::run(data_dir));
             std::process::exit(code);
+        }
+        Ok(cli::Command::ChromiumHost { data_dir }) => {
+            let data_dir = match data_dir.map(Ok).unwrap_or_else(paths::default_data_dir) {
+                Ok(d) => d,
+                Err(e) => { eprintln!("erro: {e}"); std::process::exit(exit_codes::CONFIG); }
+            };
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+            std::process::exit(rt.block_on(chromium_host::run(data_dir)));
         }
         Ok(cli::Command::Call { data_dir, method, params }) => {
             let data_dir = match data_dir.map(Ok).unwrap_or_else(paths::default_data_dir) {
@@ -262,6 +272,7 @@ async fn async_main(layout: paths::DataLayout, mode: RuntimeMode) -> i32 {
         cli_updates: crate::cli_updates::UpdatesCache::default(),
         flexi_link: crate::flexi_sync::LinkState::default(),
         browsers: crate::browser::BrowserPool::new(paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")), layout.browsers_dir.clone()),
+        personal_chrome: crate::personal_chrome::PersonalChromePool::new(server.event_sink()),
         flexi: crate::flexi::FlexiRegistry::new(if std::env::var("DOTS_SECRETS").as_deref() == Ok("memory") {
             Arc::new(dots_flexi::MemoryStore::default())
         } else {

@@ -23,6 +23,7 @@ export const useBrowserStore = defineStore("browser", {
     /** Texto de estado para a interface. */
     phase(state): "connecting" | "idle" | "live" | "error" {
       if (state.error) return "error";
+      if (state.status?.mode === "personal_chrome") return state.status.running ? "live" : "idle";
       if (state.frame) return "live";
       if (state.connecting) return "connecting";
       return "idle";
@@ -45,6 +46,7 @@ export const useBrowserStore = defineStore("browser", {
         const st = await api.browser.watch(this.dotId);
         this.status = st;
         this.error = null;
+        if (st.mode === "personal_chrome") this.connecting = false;
       } catch (e) {
         this.error = e instanceof RuntimeError ? e.message : String(e);
         this.connecting = false;
@@ -56,6 +58,15 @@ export const useBrowserStore = defineStore("browser", {
         this.status = await api.browser.status(this.dotId);
       } catch {
         /* estado e informativo */
+      }
+    },
+    async openPersonal(url: string) {
+      if (!this.dotId) return;
+      try {
+        this.status = await api.browser.openPersonal(this.dotId, url);
+        this.error = null;
+      } catch (e) {
+        this.error = e instanceof RuntimeError ? e.message : String(e);
       }
     },
     onFrame(f: BrowserFrame) {

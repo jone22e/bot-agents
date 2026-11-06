@@ -42,6 +42,7 @@ pub struct RuntimeService {
     pub event_depths: std::sync::Mutex<std::collections::HashMap<String, u32>>,
     pub flexi: crate::flexi::FlexiRegistry,
     pub browsers: crate::browser::BrowserPool,
+    pub personal_chrome: crate::personal_chrome::PersonalChromePool,
     pub usage: crate::usage::UsageCache,
     pub cli_updates: crate::cli_updates::UpdatesCache,
     /// Sincronizacao REST com o Flexi web (ADR 0016).
@@ -192,6 +193,24 @@ struct ConvAttachParams {
 struct DotIdParams {
     #[serde(default)]
     dot_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BrowserOpenParams {
+    dot_id: String,
+    url: String,
+}
+
+#[derive(Deserialize, Default)]
+struct BrowserSetupParams {
+    #[serde(default)]
+    extension_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BrowserBridgeResultParams {
+    id: String,
+    result: Value,
 }
 
 #[derive(Deserialize)]
@@ -384,6 +403,12 @@ impl RuntimeService {
             }
             "settings.set" => {
                 let SetSettingParams { key, value } = p(params)?;
+                if key == "browser.mode" && value != "isolated" && value != "personal_chrome" {
+                    return Err(DotsError::Validation("browser.mode deve ser isolated ou personal_chrome".into()));
+                }
+                if key == "browser.mode" && value == "personal_chrome" && !cfg!(target_os = "linux") {
+                    return Err(DotsError::Validation("Chromium pessoal requer Ubuntu/Linux".into()));
+                }
                 let k = key.clone();
                 let setting = self.storage.call(move |s| s.settings().set(&k, &value)).await?;
                 self.events.emit("settings.changed", json!({ "key": key }));
@@ -513,6 +538,7 @@ impl RuntimeService {
                 let id2 = id.clone();
                 self.storage.call(move |s| s.dots().delete(ACTOR_USER, &id2)).await?;
                 self.browsers.close(&id).await;
+                self.personal_chrome.remove(&id).await;
                 let _ = std::fs::remove_dir_all(self.layout.browsers_dir.join(&id));
                 self.events.emit("dots.changed", json!({ "id": id, "action": "delete" }));
                 Ok(json!({ "ok": true }))
@@ -863,6 +889,23 @@ impl RuntimeService {
             "browser.unwatch" => {
                 let DotIdParams { dot_id } = p(params)?;
                 Ok(self.browser_unwatch(&dot_id.ok_or_else(|| DotsError::Validation("dot_id obrigatorio".into()))?))
+            }
+            "browser.open_personal" => {
+                let BrowserOpenParams { dot_id, url } = p(params)?;
+                self.browser_open_personal(&dot_id, &url).await
+            }
+            "browser.personal.setup" => {
+                let BrowserSetupParams { extension_id } = p(params).unwrap_or_default();
+                self.browser_personal_setup(extension_id.as_deref()).await
+            }
+            "browser.bridge.heartbeat" => {
+                self.personal_chrome.heartbeat();
+                Ok(json!({"ok":true}))
+            }
+            "browser.bridge.result" => {
+                let BrowserBridgeResultParams { id, result } = p(params)?;
+                self.personal_chrome.result(&id, result).await;
+                Ok(json!({"ok":true}))
             }
             "memories.list" => {
                 let MemListParams { dot_id, kind, query, limit } = p(params)?;

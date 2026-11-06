@@ -14,3 +14,6 @@ um serviço Secret Service (por exemplo, GNOME Keyring).
 
 As versões seguintes são distribuídas pelo mesmo release do macOS. O atualizador do app usa o pacote `.deb` e
 pode pedir autenticação do sistema para instalá-lo.
+
+Para usar os logins do Chromium pessoal nos DOTs, siga **Conectar aplicativos > Navegador dos DOTs**
+e as instruções de [Chromium pessoal](BROWSER.md#chromium-pessoal-no-ubuntu-2026-11-05).
