@@ -39,10 +39,11 @@ pub type SharedContext = Arc<ExecutionContext>;
 
 /// A loja autorizada para a base Brasiltec. A autorizacao nao inclui outros subdominios.
 pub(crate) const BRASILTEC_STORE_HOST: &str = "brasiltec.ind.br";
+pub(crate) const WHATSAPP_WEB_HOST: &str = "web.whatsapp.com";
 
 pub(crate) fn is_connected_browser_host(host: &str, app_hosts: &[String]) -> bool {
     !host.is_empty() && app_hosts.iter().any(|h| {
-        host == h || (h != BRASILTEC_STORE_HOST && host.ends_with(&format!(".{h}")))
+        host == h || (h != BRASILTEC_STORE_HOST && h != WHATSAPP_WEB_HOST && host.ends_with(&format!(".{h}")))
     })
 }
 
@@ -578,6 +579,19 @@ mod tests {
         assert!(matches!(c.evaluate("dots_browser_click", &serde_json::json!({"_page_url":"https://brasiltec.ind.br/", "_element":"button \"Comprar agora\""})), Decision::NeedsApproval { risk: RiskLevel::Critical, .. }));
         assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://outro.brasiltec.ind.br/"})), Decision::Deny(_)));
         assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://brasiltec.ind.br.exemplo.com/"})), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn whatsapp_web_access_is_limited_to_the_exact_host_and_read_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = ctx(dir.path(), AutoApproveLevel::Read);
+        c.app_hosts.push(WHATSAPP_WEB_HOST.into());
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://web.whatsapp.com/"})), Decision::Allow { risk: RiskLevel::Read, .. }));
+        assert!(matches!(c.evaluate("dots_browser_read", &serde_json::json!({"_page_url":"https://web.whatsapp.com/"})), Decision::Allow { risk: RiskLevel::Read, .. }));
+        assert!(matches!(c.evaluate("dots_browser_type", &serde_json::json!({"_page_url":"https://web.whatsapp.com/", "_element":"textbox \"Pesquisar\"", "text":"554791679549"})), Decision::Allow { risk: RiskLevel::Read, .. }));
+        assert!(matches!(c.evaluate("dots_browser_click", &serde_json::json!({"_page_url":"https://web.whatsapp.com/", "_element":"button \"Enviar\""})), Decision::NeedsApproval { risk: RiskLevel::Write, .. }));
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://outro.web.whatsapp.com/"})), Decision::Deny(_)));
+        assert!(matches!(c.evaluate("dots_browser_open", &serde_json::json!({"url":"https://web.whatsapp.com.exemplo.com/"})), Decision::Deny(_)));
     }
 
     #[test]

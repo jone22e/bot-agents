@@ -49,14 +49,17 @@ fn random_token() -> String {
 }
 
 /// A autorizacao da loja vale apenas para a base Brasiltec, nao para outras contas Flexi.
-fn connected_browser_hosts(base_url: &str, base: Option<&str>) -> Vec<String> {
+fn connected_browser_hosts(base_url: Option<&str>, base: Option<&str>, personal_chrome: bool) -> Vec<String> {
     let mut hosts = Vec::new();
-    let flexi_host = crate::policy::url_host(base_url);
+    let flexi_host = base_url.map(crate::policy::url_host).unwrap_or_default();
     if !flexi_host.is_empty() {
         hosts.push(flexi_host);
     }
     if base == Some("c2s_brasiltec") && !hosts.iter().any(|h| h == crate::policy::BRASILTEC_STORE_HOST) {
         hosts.push(crate::policy::BRASILTEC_STORE_HOST.into());
+    }
+    if personal_chrome && !hosts.iter().any(|h| h == crate::policy::WHATSAPP_WEB_HOST) {
+        hosts.push(crate::policy::WHATSAPP_WEB_HOST.into());
     }
     hosts
 }
@@ -148,7 +151,8 @@ impl RuntimeService {
         // DOT ligado ao Flexi recebe o mapa do Flexi (marketplaces, Google Shopping x Google Ads) e o navegador abre no Flexi logado.
         let flexi_conn = self.flexi_connection_for_dot(&dot_id).await.ok().flatten();
         let flexi_context = flexi_conn.as_ref().map(|_| crate::flexi::FLEXI_CONTEXT);
-        let app_hosts = flexi_conn.as_ref().map(|c| connected_browser_hosts(&c.base_url, c.base.as_deref())).unwrap_or_default();
+        let personal_chrome = self.browser_mode().await == "personal_chrome";
+        let app_hosts = connected_browser_hosts(flexi_conn.as_ref().map(|c| c.base_url.as_str()), flexi_conn.as_ref().and_then(|c| c.base.as_deref()), personal_chrome);
         let mut effective_dot = dot.clone();
         let integration = self.storage.call({ let d = dot_id.clone(); move |s| s.apps().integration(&d, crate::flexi::KIND) }).await?;
         if let Some(integration) = integration.filter(|value| value.role_template.is_some()) {
@@ -173,7 +177,6 @@ impl RuntimeService {
             let Some(mid) = team.manager_dot_id else { return Ok(None) };
             Ok(Some(s.dots().get(&mid)?.name))
         } }).await.ok().flatten();
-        let personal_chrome = self.browser_mode().await == "personal_chrome";
         let system_instructions = build_instructions(&effective_dot, &policy, &dirs, flexi_context, &app_hosts, personal_chrome, &lessons, hiring, manager_name.as_deref());
         // Conversa com turnos anteriores do DOT mas sem sessao do motor: a sessao foi encerrada (por tamanho ou falha).
         let session_reset = resume_session.is_none()
@@ -575,10 +578,13 @@ mod tests {
 
     #[test]
     fn store_host_is_limited_to_the_brasiltec_connection() {
-        let brasiltec = connected_browser_hosts("https://flexi.c2s-business.com", Some("c2s_brasiltec"));
+        let brasiltec = connected_browser_hosts(Some("https://flexi.c2s-business.com"), Some("c2s_brasiltec"), false);
         assert_eq!(brasiltec, vec!["flexi.c2s-business.com", "brasiltec.ind.br"]);
-        assert_eq!(connected_browser_hosts("https://flexi.c2s-business.com", Some("c2s_other")), vec!["flexi.c2s-business.com"]);
-        assert_eq!(connected_browser_hosts("https://flexi.c2s-business.com", None), vec!["flexi.c2s-business.com"]);
+        assert_eq!(connected_browser_hosts(Some("https://flexi.c2s-business.com"), Some("c2s_other"), false), vec!["flexi.c2s-business.com"]);
+        assert_eq!(connected_browser_hosts(Some("https://flexi.c2s-business.com"), None, false), vec!["flexi.c2s-business.com"]);
+        assert_eq!(connected_browser_hosts(None, None, true), vec!["web.whatsapp.com"]);
+        assert_eq!(connected_browser_hosts(Some("https://flexi.c2s-business.com"), None, true), vec!["flexi.c2s-business.com", "web.whatsapp.com"]);
+        assert!(connected_browser_hosts(None, None, false).is_empty());
     }
 
     #[test]
