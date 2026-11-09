@@ -58,6 +58,11 @@ pub fn catalog() -> &'static [FlexiTool] {
         FlexiTool { name: "flexi_sincronizar_status_anuncio_ml", description: "Solicita reconciliacao do status local pela fila do Flexi apos consulta remota. Retorna a decisao de enfileiramento; a resposta nao confirma conclusao da sincronizacao.", method: "POST", path: "/api/precificacao/mercadolivre/anuncios/{id}/sincronizar-status", params_in: ParamsIn::Body, params: &[("id", "integer", "id interno do anuncio (produto_marketplace.id)", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_status", description: "Consulta o resultado resumido e a proxima data de verificacao de 1 a 200 familias, sem iniciar nova verificacao. Exemplo ids='155'. Nao inclui os achados; use flexi_familia_verificacao_detalhe para investigar erro ou alerta.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/status", params_in: ParamsIn::Query, params: &[("ids", "string", "IDs de familia separados por virgula, ex.: 155", true)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_familia_verificacao_detalhe", description: "Consulta o ultimo diagnostico persistido da familia, incluindo achados, erro e data. Somente leitura; nao inicia nova verificacao. Se nao houver registro, informe que o motivo ainda nao esta disponivel.", method: "GET", path: "/api/produtos/familias-marketplace/diagnostico/familias/{id}/verificacao", params_in: ParamsIn::Query, params: &[("id", "integer", "id da familia marketplace", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_familias_ml_divididas", description: "Lista paginada de familias com diagnostico persistido de anuncios divididos no ML. A verificacao pode estar antiga; confirme remotamente antes de corrigir.", method: "GET", path: "/api/produtos/familias-marketplace/reagrupamento-ml/pendentes", params_in: ParamsIn::Query, params: &[("pagina", "integer", "pagina a partir de 1", false), ("limite", "integer", "1 a 100", false)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_reagrupamento_ml_plano", description: "Prepara plano comprovado para um anuncio fora da familia ML: retorna MLB, MLBU, familia atual/alvo, atributos exatos, origem dos valores e fingerprint. Nao altera o item.", method: "GET", path: "/api/produtos/familias-marketplace/{id}/reagrupamento-ml/plano", params_in: ParamsIn::Query, params: &[("id", "integer", "id da familia local", true), ("anuncio_id", "integer", "id interno do anuncio fora da familia", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_reagrupamento_ml_estado", description: "Consulta o estado remoto atual do MLB e MLBU, familia, membros, atributos, preco, estoque e status. Use apos resultado pendente; compare com o plano original, sem reenviar o PUT.", method: "GET", path: "/api/produtos/familias-marketplace/{id}/reagrupamento-ml/estado", params_in: ParamsIn::Query, params: &[("id", "integer", "id da familia local", true), ("anuncio_id", "integer", "id interno do anuncio", true)], risk: R, group: "anuncios" },
+        FlexiTool { name: "flexi_reagrupamento_ml_aplicar", description: "Aplica somente os atributos do plano atual ao MLB existente. Preserva MLB/MLBU, preco, estoque e status; resultado pendente ou erro exige flexi_reagrupamento_ml_estado, nunca reenvio cego.", method: "POST", path: "/api/produtos/familias-marketplace/{id}/reagrupamento-ml/aplicar", params_in: ParamsIn::Body, params: &[("id", "integer", "id da familia local", true), ("anuncio_id", "integer", "id interno do anuncio fora da familia", true), ("fingerprint", "string", "fingerprint devolvido pelo plano atual", true)], risk: W, group: "anuncios" },
+        FlexiTool { name: "flexi_reagrupamento_ml_conciliar", description: "Apos estado remoto comprovado, confirma IDs/familia/preco/estoque/status e concilia atributos personalizados locais. Use os valores do plano original; nao altera o item no ML.", method: "POST", path: "/api/produtos/familias-marketplace/{id}/reagrupamento-ml/conciliar", params_in: ParamsIn::Body, params: &[("id", "integer", "id da familia local", true), ("anuncio_id", "integer", "id interno do anuncio", true), ("mlb", "string", "MLB original", true), ("mlbu", "string", "MLBU original", true), ("family_id_alvo", "string", "familia remota alvo do plano", true), ("preco", "number", "preco remoto anterior", true), ("estoque", "number", "estoque remoto anterior", true), ("status", "string", "status remoto anterior", true)], risk: W, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_vendas", description: "Vendas por anuncio.", method: "POST", path: "/api/gestao-marketplaces/anuncios/vendas", params_in: ParamsIn::Body, params: &[("ids", "array", "ids de anuncio", false), ("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_anuncios_falha", description: "Anuncios com falha de publicacao/sincronizacao.", method: "POST", path: "/api/gestao-marketplaces/anuncios/falha", params_in: ParamsIn::Body, params: &[("marketplace", "integer", "", false), ("marketplace_conta_id", "integer", "", false)], risk: R, group: "anuncios" },
         FlexiTool { name: "flexi_precos_calculados", description: "Precos calculados pelo Flexi para um anuncio (preco sugerido, preco minimo, taxas, frete). Consulte antes de alterar qualquer preco; nunca va abaixo do preco minimo.", method: "GET", path: "/api/gestao-marketplaces/anuncios/precos-calculados", params_in: ParamsIn::Query, params: &[("anuncio_id", "integer", "id do anuncio (produto_marketplace.id)", true)], risk: R, group: "anuncios" },
@@ -208,6 +213,23 @@ mod tests {
             assert!(t.name.starts_with("flexi_"));
         }
         assert!(tool_definitions().len() > 30);
+    }
+
+    #[test]
+    fn reagrupamento_ml_expoe_preparo_e_escrita_limitada_ao_item() {
+        let queue = find_tool("flexi_familias_ml_divididas").unwrap();
+        assert_eq!(queue.risk, ToolRisk::Read);
+        let plan = find_tool("flexi_reagrupamento_ml_plano").unwrap();
+        let (path, query, body) = build_request(plan, &json!({ "id": 4178, "anuncio_id": 3 })).unwrap();
+        assert_eq!(path, "/api/produtos/familias-marketplace/4178/reagrupamento-ml/plano");
+        assert_eq!(query.unwrap()["anuncio_id"], 3);
+        assert!(body.is_none());
+        let apply = find_tool("flexi_reagrupamento_ml_aplicar").unwrap();
+        assert_eq!(apply.risk, ToolRisk::Write);
+        let (path, query, body) = build_request(apply, &json!({ "id": 4178, "anuncio_id": 3, "fingerprint": "abc" })).unwrap();
+        assert_eq!(path, "/api/produtos/familias-marketplace/4178/reagrupamento-ml/aplicar");
+        assert!(query.is_none());
+        assert_eq!(body.unwrap()["anuncio_id"], 3);
     }
 
     #[test]
