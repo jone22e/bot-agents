@@ -13,6 +13,14 @@ use crate::service::RuntimeService;
 /// Rota do Flexi com as especialidades do aplicativo Agentes DOTS (cadastradas em Configuracoes > Aplicativos).
 pub const ESPECIALIDADES_PATH: &str = "/api/sub-aplicativos/agentes-dots/especialidades";
 const SUBESPECIALIDADE_PREFIX: &str = "sub:";
+const REAGRUPAMENTO_ML_CODIGO: &str = "gerente_de_reagrupamento_de_familias_ml";
+const REAGRUPAMENTO_ML_FERRAMENTAS: &str = r#"
+
+## Roteiro das ferramentas Flexi de reagrupamento
+Quando o usuario enviar URL /estoque/produtos/familias/{id}, use esse id de familia. Para procurar casos, percorra flexi_familias_ml_divididas; a fila e baseada no ultimo diagnostico persistido e pode estar incompleta ou vencida. Para a familia recebida, chame flexi_familia_diagnosticar_agora e flexi_familia_ml_inspecionar; o ultimo le em lote MLB, MLBU, family_id e atributos por conta, mesmo com rascunho em outro marketplace. Se o diagnostico indicar cadastro incompleto, mantenha essa pendencia separada da divisao ML. Nunca trate o cadastro local como prova de agrupamento remoto.
+Trabalhe uma conta e um anuncio separado por vez. Chame flexi_reagrupamento_ml_plano com anuncio_id. Se houver empate 1 a 1, apresente ao usuario os family_ids candidatos com seus MLBs e peca a escolha do family_id_alvo; nao escolha sozinho. Depois de informar o alvo, se o plano devolver atributos_candidatos, mostre id, valor atual e valor da familia alvo e peca confirmacao expressa para cada valor sem prova local. Reenvie o plano com family_id_alvo e atributos_confirmados {id,value_id,value_name} exatamente como confirmados. Valor observado no outro item nao equivale a confirmacao do usuario sobre este produto. Se o plano recusar por conflito local, investigue e pare; nao force o valor.
+Antes de aplicar, guarde o plano integral com dots_remember usando chave que inclua familia local, conta, MLB e MLBU. O plano inclui fingerprint, atributos_anteriores, alteracoes, preco, estoque e status. Delegue com include_instructions=true e entregue ao funcionario as decisoes confirmadas e o plano exato. Aplique somente com flexi_reagrupamento_ml_aplicar repetindo family_id_alvo e atributos_confirmados do plano. O PUT envia apenas atributos e pode ficar pendente; nao reenvie. Consulte flexi_reagrupamento_ml_estado ate o ML confirmar MLB, MLBU, family_id no item e User Product, membros, atributos, preco, estoque e status. Depois use flexi_reagrupamento_ml_conciliar passando os campos originais do plano, inclusive atributos_anteriores, alteracoes e atributos_confirmados. Se houver divergencia, registre-a e pare. Ao final, diagnostique novamente a familia e inspecione todas as contas; so declare resolvida a conta quando todos os MLB/MLBU originais estiverem na mesma familia remota e o achado de divisao tiver desaparecido. Registre pendencias nao relacionadas separadamente.
+"#;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FlexiSubspecialty {
@@ -91,7 +99,11 @@ pub fn templates_from_flexi(v: &Value) -> Vec<FlexiRoleTemplate> {
                 return None;
             }
             let trust = if s("permissao") == "write" { AutoApproveLevel::Write } else { AutoApproveLevel::Read };
-            let mut template = build(&id, &name, &group, &group_name, trust, s("instrucoes"));
+            let mut purpose = s("instrucoes");
+            if id == REAGRUPAMENTO_ML_CODIGO && group == "mercadolivre" {
+                purpose.push_str(REAGRUPAMENTO_ML_FERRAMENTAS);
+            }
+            let mut template = build(&id, &name, &group, &group_name, trust, purpose);
             template.subspecialties = it.get("subespecialidades").and_then(Value::as_array)
                 .into_iter().flatten()
                 .filter_map(|sub| {
@@ -287,5 +299,18 @@ mod tests {
         assert_eq!(instructions_for_template(&list, "sub:gerente_compras:reposicao").unwrap(), "Verifique estoque.");
         assert!(instructions_for_template(&list, "sub:gerente_compras:nao_existe").is_err());
         assert!(templates_from_flexi(&json!({ "status": 1 })).is_empty());
+    }
+
+    #[test]
+    fn reagrupamento_recebe_roteiro_de_ferramentas_sem_alterar_outras_especialidades() {
+        let list = templates_from_flexi(&json!({ "items": [
+            { "codigo": REAGRUPAMENTO_ML_CODIGO, "nome": "Reagrupamento", "setor": "mercadolivre", "setor_nome": "Mercado Livre", "permissao": "write", "instrucoes": "Regra cadastrada." },
+            { "codigo": "outra", "nome": "Outra", "setor": "mercadolivre", "setor_nome": "Mercado Livre", "permissao": "write", "instrucoes": "Regra original." }
+        ] }));
+        let texto = instructions_for_template(&list, REAGRUPAMENTO_ML_CODIGO).unwrap();
+        assert!(texto.contains("Regra cadastrada."));
+        assert!(texto.contains("flexi_reagrupamento_ml_conciliar"));
+        assert!(texto.contains("atributos_candidatos"));
+        assert_eq!(instructions_for_template(&list, "outra").unwrap(), "Regra original.");
     }
 }
