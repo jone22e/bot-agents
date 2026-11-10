@@ -39,6 +39,31 @@ mod tests {
         assert_eq!(messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u1", "u2", "r2", "r1"]);
         assert_eq!(messages[3].created_at.to_rfc3339(), "2026-10-16T10:00:05+00:00");
     }
+
+    #[test]
+    fn followup_reply_only_joins_group_task_from_same_dot() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE group_messages (id TEXT, content TEXT, metadata_json TEXT, created_at TEXT);
+             CREATE TABLE messages (id TEXT, content TEXT, task_id TEXT, metadata_json TEXT, created_at TEXT, role TEXT, execution_id TEXT);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, dot_id TEXT, origin TEXT, correlation_id TEXT);
+             CREATE TABLE dots (id TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE executions (id TEXT PRIMARY KEY, finished_at TEXT);
+             INSERT INTO dots VALUES ('a', 'Ana'), ('b', 'Bia');
+             INSERT INTO tasks VALUES ('group', 'a', 'group:u1', NULL);
+             INSERT INTO tasks VALUES ('same', 'a', 'followup:group', 'group');
+             INSERT INTO tasks VALUES ('other', 'b', 'followup:group', 'group');
+             INSERT INTO tasks VALUES ('ordinary', 'a', 'user', NULL);
+             INSERT INTO tasks VALUES ('unrelated', 'a', 'followup:ordinary', 'ordinary');
+             INSERT INTO group_messages VALUES ('u1', 'pedido', '{}', '2026-10-16T10:00:00.000Z');
+             INSERT INTO messages VALUES ('included', 'resposta', 'same', '{}', '2026-10-16T10:01:00.000Z', 'dot', NULL);
+             INSERT INTO messages VALUES ('other-dot', 'fora', 'other', '{}', '2026-10-16T10:02:00.000Z', 'dot', NULL);
+             INSERT INTO messages VALUES ('not-group', 'fora', 'unrelated', '{}', '2026-10-16T10:03:00.000Z', 'dot', NULL);",
+        ).unwrap();
+
+        let messages = GroupRepo::new(&mut conn).messages(20).unwrap();
+        assert_eq!(messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u1", "included"]);
+    }
 }
 
 /// Prefixo da origem das tarefas criadas por uma mensagem do grupo (`group:<id da mensagem>`).
@@ -80,8 +105,9 @@ impl<'a> GroupRepo<'a> {
                     "SELECT m.id, m.content, m.task_id, m.metadata_json, COALESCE(e.finished_at, m.created_at), t.dot_id, d.name
                      FROM messages m JOIN tasks t ON t.id = m.task_id JOIN dots d ON d.id = t.dot_id
                      LEFT JOIN executions e ON e.id = m.execution_id
+                     LEFT JOIN tasks g ON g.id = t.correlation_id AND g.dot_id = t.dot_id AND g.origin LIKE 'group:%'
                      WHERE m.role = 'dot' AND (t.origin LIKE 'group:%'
-                        OR (t.origin LIKE 'followup:%' AND t.correlation_id IN (SELECT g.id FROM tasks g WHERE g.origin LIKE 'group:%' AND g.dot_id = t.dot_id)))
+                        OR (t.origin LIKE 'followup:%' AND g.id IS NOT NULL))
                      ORDER BY COALESCE(e.finished_at, m.created_at) DESC, m.rowid DESC LIMIT ?1",
                 )
                 .map_err(storage_err)?;
